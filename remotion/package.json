@@ -1,0 +1,19 @@
+{
+  "name": "github-trending-remotion",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "remotion studio",
+    "build": "remotion render"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "remotion": "^4.0.456"
+  },
+  "devDependencies": {
+    "@remotion/cli": "^4.0.456",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.4.0"
+  }
+}
