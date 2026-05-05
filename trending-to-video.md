@@ -13,155 +13,111 @@ allowed-tools: Bash(python3 *) Bash(curl *) Bash(npx *) Bash(mkdir *)
 确保 Chrome 已开启远程调试：
 
 ```bash
-start "" "C:/Program Files/Google/Chrome/Application/chrome.exe" --remote-debugging-port=9222 --remote-allow-origins=* --headless=new --window-size=1920,1080 "about:blank"
+google-chrome --remote-debugging-port=9222 --remote-allow-origins=* --headless=new --window-size=1920,1080 "about:blank"
 ```
 
 ## 执行流程
 
-### 步骤 1：抓取热门项目
+### 步骤 1：确保 Chrome 远程调试运行
 
 ```bash
-PYTHONIOENCODING=utf-8 python3 "D:/BaiduSyncdisk/Obsidian/ForCC/.claude/skills/github-trending/scripts/fetch_trending.py"
+google-chrome --remote-debugging-port=9222 --remote-allow-origins=* --headless=new --window-size=1920,1080 "about:blank"
 ```
 
-输出格式：`序号|owner/repo|周增星数|总星数|语言|描述`
+> Remotion Studio 由 Web 管理台自动启动，无需手动运行。点击 "Preview in Remotion" 按钮时自动检测并启动。
 
-### 步骤 2：让用户选择
-
-在对话中展示前 10 个项目列表，让用户选择要制作视频的项目（输入编号 1-10）。
-
-### 步骤 3：获取项目详情
-
-用 WebFetch 抓取项目 README，提取：
-- 详细描述
-- 核心功能列表（6 个主要功能）
-- 作者信息（用户名、身份/头衔）
-
-整理为以下结构化数据：
-- `repo`: owner/name
-- `totalStars`: 总星数（如 "57,273"）
-- `weeklyStars`: 周增星数（如 "34,848"）
-- `language`: 主要语言
-- `description`: 一句话描述（英文）
-- `author`: 作者用户名
-- `authorTitle`: 作者身份描述
-- `features`: JSON 数组，每个元素 `{name, desc, icon}`
-
-### 步骤 4：截图（CDP）
-
-截图脚本会自动定位星标按钮坐标（输出 `STAR_POS: {x, y, w, h}`），只隐藏全局导航栏和侧边栏，**保留页面主体和星标按钮**，白底截图。
+### 步骤 2：抓取 Trending 数据（如尚未抓取）
 
 ```bash
-PYTHONIOENCODING=utf-8 python3 "D:/BaiduSyncdisk/Obsidian/ForCC/.claude/skills/github-trending/scripts/screenshot_cdp.py" "https://github.com/<owner>/<repo>" "screenshot_<safe_name>.png"
+curl -s "https://github.com/trending?since=weekly" -o "<skill-dir>/trending.html"
+python3 "<skill-dir>/scripts/fetch_trending.py" "<skill-dir>/trending.html"
 ```
 
-截图输出中会打印星标按钮的真实坐标，后续视频中红圈定位需使用该坐标。例如：
-```
-STAR_POS: {"x": 1734.4, "y": 88, "w": 122.6, "h": 28, "vw": 1904, "vh": 985}
-```
+将输出（`序号|owner/repo|...` 格式）写入 `<skill-dir>/trending.json`。
 
-### 步骤 5：生成 VoxCPM 语音旁白
-
-参考音频：`D:/douyincontent/hjf_test.wav`
-
-生成中文旁白文本（模板）：
-
-```
-今天介绍的 GitHub 热门项目是 <repo> ，本周获得<weeklyStars>颗星。这是一个基于<language>语言开发的<简短描述>。主要功能包括：<功能1>、<功能2>、<功能3>等。该项目在社区引起广泛关注，值得开发者了解和尝试。
-```
-
-然后通过 HuggingFace API 调用 VoxCPM2（`openbmb/VoxCPM-Demo`）：
-
-```python
-from gradio_client import Client
-from gradio_client.utils import handle_file
-
-client = Client('openbmb/VoxCPM-Demo')
-result = client.predict(
-    text_input=narration_text,
-    control_instruction='',
-    reference_wav_path_input=handle_file('D:/douyincontent/hjf_test.wav'),
-    use_prompt_text=False,
-    prompt_text_input='',
-    cfg_value_input=2.0,
-    do_normalize=False,
-    denoise=False,
-    api_name='/generate',
-)
-# 将 result 复制到 remotion/public/narration_<safe_name>.wav
-```
-
-### 步骤 6：渲染视频
-
-将步骤 3 整理的数据写为 JSON props，渲染 Remotion 视频：
+### 步骤 3：启动 Web 管理台
 
 ```bash
-cd "D:/BaiduSyncdisk/Obsidian/ForCC/.claude/skills/github-trending/remotion" && npx remotion render MainComposition "D:/BaiduSyncdisk/Obsidian/ForCC/Daily Notes/GitHub Trending/<safe_name>-promo.mp4" --props='{"repo":"<repo>","totalStars":"<total>","weeklyStars":"<weekly>","language":"<lang>","description":"<desc>","author":"<author>","authorTitle":"<title>","features":[...],"screenshot":"screenshot_<safe_name>.png","audio":"narration_<safe_name>.wav"}'
+source /home/ppcorn/miniconda3/etc/profile.d/conda.sh && conda activate voxcpm && python3 "<skill-dir>/scripts/web_ui.py" --port 8765
 ```
 
-渲染前需根据 CDP 输出的 `STAR_POS` 坐标更新 `MainComposition.tsx` 中 S3（star_detail）红圈和 `transformOrigin` 参数：
-- `circleCX` / `circleCY` = 红圈中心 = starBtn 坐标 ± 边距（当前硬编码为 CDP 实测值）
-- `transformOrigin` = `x/vw * 100% y/vh * 100%`（星标按钮在 viewport 中的百分比位置）
+Web 管理台启动后会打印服务器外部地址（如 `http://192.168.x.x:8765`），在浏览器中打开该地址即可。如果在服务器本机操作，也可以使用 `http://localhost:8765`。
 
-如需调整任何场景的时间或转场效果，修改 `SCENES` 数组（定义于 `MainComposition.tsx`）中对应项的 `start`/`end`/`enter`/`exit`/`nextTransition` 字段即可。
+> 服务绑定在 `0.0.0.0`，支持从局域网内其他设备访问。如果从其他设备连接，请使用服务器 IP 地址而非 localhost。
 
-### 步骤 7：展示结果
+### 步骤 4：用户在 Web 管理台完成全部操作
 
-告知用户视频保存位置，输出视频时长和文件大小。
+Web 管理台提供完整工作流，URL 支持 `?repo=owner/name` 直接加载项目：
+
+1. **Refresh Trending** → 从 GitHub 抓取最新 trending 数据
+2. **Generate Video** → 选择项目，自动获取 README、提取功能、生成旁白
+3. **Take Screenshots** → 自动 CDP 截图（top + intro/README），星标自动加红圈
+4. **编辑** → 左侧截图预览，右侧项目信息 + 功能列表 + S1-S7 场景旁白文本（每行可编辑）
+5. **Generate Voice** → 通过 HuggingFace Space `openbmb/VoxCPM-Demo` 生成语音
+6. **Preview in Remotion** → 自动生成语音后打开 Remotion Studio（视频时长匹配语音）
+7. **Build Video** → 渲染最终 MP4
 
 ## 场景与时间线
 
-视频共 6 个场景，总长 31 秒 / 930 帧 @ 30fps。
+视频共 7 个场景，时长由语音自动决定（`durationSeconds * 30 + 15` 帧）。场景时间与旁白文本对齐（`narrationTiming` 中的字符位置比例）。
 
-| 场景 | 帧 | 时间 | 内容 | 语音对应 |
-|------|-----|------|------|------|
-| S1a 打字机 | 0–80 | 0–2.7s | 紫蓝渐变背景 + 磨砂玻璃卡片，白色大字打字机 + 金色闪烁光标 | "今天介绍的GitHub热门项目是" |
-| S1b 项目揭示 | 70–150 | 2.3–5s | 灰白渐变背景 + 白色卡片布局：项目名+图标+语言标签+描述+统计卡片 | "mattpocock/skills" |
-| S2 截图+星数 | 135–300 | 4.5–10s | 全页截图（白底），深色半透明卡片叠加星数 | "本周获得xxx颗星" |
-| S3 星标红框 | 280–420 | 9.3–14s | 截图放大右上角星标区域（红框已由 CDP 注入截图） + 星数 | 星数+项目描述 |
-| S4 功能列表 | 400–840 | 13.3–28s | 白底 + 6大核心功能卡片（逐帧硬编码触发） + 项目简介卡片 | "主要功能包括..." |
-| S5 结语 | 820–930 | 27.3–31s | 紫蓝渐变 + 磨砂玻璃卡片（与 S1a 呼应），"关注我，获得最新的实用项目信息" | 结尾语音 |
+| 场景 | 内容 | 截图 | 语音对应 |
+|------|------|------|------|
+| S1 开场 | 紫蓝渐变 + 打字机 | — | "今天介绍的GitHub热门项目是" |
+| S2 项目卡片 | 白色卡片：项目名+语言+描述+统计 | — | 项目名称 |
+| S3 页面截图 | 页面顶部截图 + 星数叠加 | top | "本周获得xxx颗星" |
+| S4 星标放大 | 截图放大至星标区域 + 红圈 | top | "总计xxx颗星" |
+| S5 项目介绍 | README 长图缓慢向上滚动 | intro | 项目描述 |
+| S6 功能介绍 | 功能卡片逐个高亮 + intro 截图淡背景 | intro | "主要功能包括..." |
+| S7 结尾 | 紫蓝渐变 + "关注我，获得最新的实用项目信息" | — | 结尾语音 |
 
 ## 场景转场
 
-所有场景切换使用纯 `fade` 淡入淡出，无转场特效覆盖层。画面干净无闪烁。
+所有场景切换使用纯 `fade` 淡入淡出，无转场特效覆盖层。
 
 ## 关键实现细节
 
-### 开场设计（S1a + S1b）
-采用现代前端设计风格（frontend aesthetic）：
-- **S1a**：紫蓝渐变背景（`#667eea → #764ba2`） + 磨砂玻璃卡片（`backdrop-filter: blur`），白色大字打字机 + 金色闪烁光标
-- **S1b**：灰白渐变背景 + 白色卡片布局，项目名配图标 + 语言标签胶囊 + 描述文字 + 两张指标卡片（Total Stars / This Week，左侧彩色边框）
+### 开场设计（S1 + S7 首尾呼应）
+- **S1**：紫蓝渐变背景（`#667eea → #764ba2`） + 磨砂玻璃卡片，白色大字打字机 + 金色闪烁光标
+- **S7**：与 S1 呼应的紫蓝渐变背景 + 磨砂玻璃卡片，白色文字居中
 
-### 结语设计（S5）
-与 S1a 呼应的紫蓝渐变背景 + 磨砂玻璃卡片，白色文字居中。
+### 星标文字（S3）
+截图上方叠加深色半透明卡片显示星数，总星数直接展示完整值。
 
-### 星标文字（S2）
-截图上方叠加深色半透明卡片（`rgba(13,17,23,0.85)` 圆角底）衬白色数字，帧 175 淡入、帧 270 淡出。总星数直接显示完整值。
+### 星标红框（S4）
+红框通过 CDP 直接在浏览器中注入：
+1. 在当前页面找到 Star 按钮（GitHub 现在使用 `<a>` 标签，非 `<button>`）
+   - 策略 1：查找 `span.d-inline` 中文本为 "Star" 或 "Unstar" 的元素，取其最近的 `<a>` 父元素
+   - 策略 2：查找 `a.btn-sm.btn` 中文本包含 "Star" 的链接
+   - 策略 3：查找 `[aria-label*="star"]` 元素
+2. 创建一个 `position: fixed; z-index: 99999` 的 `<div>` 覆盖层，精确放置在 Star 按钮的 bounding box 上（各边扩展 5-6px），设置 `border: 4px solid #ff3333` + 红色 `box-shadow` glow
+3. 同时对 Star 元素本身应用 `outline: 3px solid #ff3333` + `box-shadow`
+4. 第二张截图前移除红圈覆盖层（`#__star_red_ring__`）
 
-### 星标红框（S3）
-红框通过 CDP 直接注入截图：截图时在浏览器中找到 Star 按钮的 `aria-label`，对其容器设置 `outline: 3px solid #ff3333` + 红色 `box-shadow` glow。不再使用 Remotion SVG 覆盖层，位置 100% 准确。
+### 截图说明
+**第一张截图（top）**：页面顶部，包含 Star 按钮区域。在注入红圈后捕获。
 
-### 功能列表（S4）
-白底 + light-mode 配色。功能卡片通过硬编码帧偏移数组 `featureFrames` 逐个触发高亮，与语音逐项对齐。如需微调某个功能的出现时机，修改对应帧偏移值即可。
+**第二张截图（intro/README）**：从 README 顶部开始往下截，只截取内容区域（不含两侧空白）。
+关键实现（`screenshot_cdp.py`）：
+1. 找到 `article.markdown-body`（或 `#readme`）元素
+2. `window.scrollTo(0, scrollY + rect.top)` 将 README 顶部滚到视口顶部
+3. 设置 viewport 高度为 README 完整 `scrollHeight`，**宽度保持 1920px 不变**（避免布局重排导致元素位移）
+4. 重新测量 `rect`，计算**页面坐标系**中的裁剪区域：
+   - `clip.x = scrollX + rect.left`（README 左边界绝对位置，约 378px）
+   - `clip.y = scrollY + rect.top`（README 上边界绝对位置，约 2496px）
+   - `clip.width = rect.width`（内容列宽度，约 838px）
+   - `clip.height = scrollHeight`（完整内容高度）
+5. `Page.captureScreenshot` 传入 `clip` 参数精确截取
+6. **关键坑**：CDP 的 `clip` 使用**页面坐标系**（page coordinates），不是视口相对坐标；且不能改变 viewport 宽度，否则 GitHub 响应式布局会重排
 
-```typescript
-const featureFrames = [55, 108, 162, 218, 272, 335];
-// 每个值 = 相对 S4 起始帧的偏移量
-```
+### S5 项目介绍（滚动动画）
+第二张截图是拍平的完整 README 长图。S5 场景使用 `translateY` 从 0%→-200% 快速滚动，模拟从上往下阅读 README 的效果。
 
-### 语音旁白
-VoxCPM 生成的中文旁白，结尾包含 "关注我，获得最新的实用项目信息"。参考音频 `D:/douyincontent/hjf_test.wav`。
+### 场景时间对齐
+**S1-S4、S7**：固定 2.5 秒。**S5、S6**：按字符比例分配音频剩余时间。`sceneDurations` 保存在 props.json，`buildScenes()` 将其转为精确帧数。
 
-### 设计原则
-- **S1a + S5**（首尾呼应）：紫蓝渐变 + 磨砂玻璃卡片（frontend aesthetic）
-- **S1b**：灰白渐变 + 白色卡片布局，指标卡片左侧彩色边框
-- **S2–S4**：纯色背景，无渐变、无扫描线、无转场特效覆盖层
-- 场景切换仅用 fade 淡入淡出，保持画面干净无闪烁
-- 不暴露 GitHub 完整 URL
-- 星标红框由 CDP 注入截图，100% 精准定位
-- 总星数直接展示完整值，不计数动画
-- 功能清单用 `featureFrames` 逐帧硬编码时间点与语音对齐
+### 语音生成
+**优先本地 VoxCPM**（`~/voxcpm/pretrained_models/VoxCPM2`），一次加载生成 7 场景 + 1 合并音频。`normalize_for_tts()` 自动转换全大写词（如 `SKILL.md`→`skill markdown`）。本地失败则回退 HuggingFace Space。
 
 ## 输出文件
 
@@ -185,6 +141,7 @@ interface VideoProps {
     desc: string;         // "What it does"
     icon: string;         // emoji
   }>;
+  narration: string;      // Chinese narration text (editable in web UI)
   screenshot: string;     // filename in public/
   audio: string;          // filename in public/
 }
