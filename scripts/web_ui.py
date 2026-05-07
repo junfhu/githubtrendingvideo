@@ -781,11 +781,33 @@ def _strip_html(text):
     return text
 
 
+def _clean_table_rows(text):
+    """Convert markdown table content to readable list format."""
+    lines = text.split("\n")
+    cleaned = []
+    for line in lines:
+        stripped = line.strip()
+        # Skip table separator rows (|---|---|)
+        if re.match(r"^[\|\s\-:]+$", stripped) and not re.search(r'[^\|\s\-:]', stripped):
+            continue
+        # Remove pipe characters and replace with comma-separated items
+        if "|" in stripped:
+            cells = [c.strip() for c in stripped.split("|")]
+            cells = [c for c in cells if c and not re.match(r"^[-:]+$", c)]
+            if cells:
+                cleaned.append(": ".join(cells) if len(cells) == 2 else ", ".join(cells))
+        else:
+            cleaned.append(stripped)
+    return " ".join(cleaned)
+
+
 def _clean_md(text):
     """Strip markdown formatting and HTML tags from text."""
     text = _strip_html(text)
+    text = _clean_table_rows(text)
     text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
-    text = re.sub(r"[*_~`]", "", text)
+    text = re.sub(r"[*_~`|]", "", text)
+    text = re.sub(r"[-=]{3,}", "", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -793,9 +815,12 @@ def _clean_md(text):
 def _normalize_heading(text):
     """Strip emoji, markdown formatting, and extra whitespace from a heading."""
     import re as _re
-    # Remove emoji and special unicode symbols
-    text = _re.sub(r'[\U0001F300-\U0001F9FF☀-➿⭐✅❌✨❤⬆→➡⚙⚡✨]', '', text)
-    text = _re.sub(r'[^\w\s一-鿿぀-ゟ゠-ヿ가-힯\-\(\)\[\]{}.,;:!?@#\$%^&*+=/\\|~`\'"]', '', text)
+    # Remove emoji and common unicode symbols (keep CJK, Latin, numbers, punctuation)
+    text = _re.sub(r'[\U0001F300-\U0001F9FF\U0001FA00-\U0001FAFF'
+                   r'☀-➿⭐✅❌✨❤'
+                   r'⬆➡➡⚙⚡✨]', '', text)
+    text = _re.sub(r'[^\w\s一-鿿぀-ゟ゠-ヿ가-힯'
+                   r'\-\(\)\[\]{}.,;:!?@#$%^&*+=/\\|~`\'"]', '', text)
     text = _re.sub(r'[*_`#]', '', text)
     text = _re.sub(r'\s+', ' ', text).strip()
     return text
@@ -859,7 +884,7 @@ def extract_chinese_description(readme_text, fallback_desc, topics):
 
     # ── Pass 1: find best matching section by priority ──
     # Collect ALL h2 sections with scores
-    sections = []  # [(heading_text, heading_index, lines_list, score)]
+    sections = []  # [(heading_text, heading_index, cleaned_text, score, raw_text)]
     h2_count = 0
     current_heading = ""
     current_lines = []
@@ -867,7 +892,8 @@ def extract_chinese_description(readme_text, fallback_desc, topics):
     def _finish_section():
         nonlocal current_heading, current_lines
         if current_lines and current_heading:
-            text = _clean_md(" ".join(current_lines))
+            raw = " ".join(current_lines)
+            text = _clean_md(raw)
             if len(text) > 20:
                 h_clean = _normalize_heading(current_heading)
                 score = 0
@@ -878,7 +904,7 @@ def extract_chinese_description(readme_text, fallback_desc, topics):
                 elif not _is_skip_heading(h_clean):
                     score = 2
                 if score > 0:
-                    sections.append((current_heading, h2_count, text, score, len(text)))
+                    sections.append((current_heading, h2_count, text, score, raw))
         current_heading = ""
         current_lines = []
 
@@ -900,16 +926,30 @@ def extract_chinese_description(readme_text, fallback_desc, topics):
             continue
 
         if current_heading and stripped and not stripped.startswith("#") and not stripped.startswith("<!--"):
-            current_lines.append(stripped)
-            if len(current_lines) > 30:  # Cap per section
-                break
+            if len(current_lines) < 30:
+                current_lines.append(stripped)
 
     _finish_section()
 
-    # Pick the best section: prefer value (score 10) with most content
-    sections.sort(key=lambda s: (s[3], s[4]), reverse=True)
-    if sections:
-        best = sections[0]
+    # Pick the best section: blend heading relevance with content quality
+    # Check RAW text (before _clean_md) for table indicators — pipes, separators
+    scored = []
+    for heading, idx, cleaned_text, score, raw_text in sections:
+        pipe_ratio = raw_text.count("|") / max(len(raw_text), 1)
+        dash_lines = len(re.findall(r"[-=]{3,}", raw_text))
+        # Quality factor: 1.0 for prose, <0.5 for table-heavy sections
+        quality_factor = 1.0
+        if pipe_ratio > 0.03 or dash_lines > 1:
+            quality_factor = max(0.2, 1.0 - pipe_ratio * 25)
+        elif pipe_ratio > 0.01:
+            quality_factor = 0.8
+        effective_score = round(score * quality_factor, 1)
+        prose_len = len(cleaned_text)
+        scored.append((heading, idx, cleaned_text, effective_score, prose_len))
+
+    scored.sort(key=lambda s: (s[3], s[4]), reverse=True)
+    if scored:
+        best = scored[0]
         what_is_text = best[2]
         matched_heading = best[0]
         heading_index = best[1]
