@@ -98,6 +98,58 @@ def translate_to_chinese(text):
         return text  # fallback to original on failure
 
 
+def _number_to_chinese(n):
+    """Convert an integer to Chinese numeral string (e.g. 1234 → 一千二百三十四)."""
+    if n == 0:
+        return "零"
+    digits = "零一二三四五六七八九"
+    units = ["", "十", "百", "千"]
+    big_units = ["", "万", "亿"]
+
+    # Split into 4-digit segments: [个位段, 万位段, 亿位段]
+    segs = []
+    while n > 0:
+        segs.append(n % 10000)
+        n //= 10000
+
+    # Convert each segment to Chinese
+    def _seg_cn(seg):
+        if seg == 0:
+            return ""
+        s = ""
+        prev_zero = False
+        for i in range(3, -1, -1):
+            d = (seg // (10 ** i)) % 10
+            if d != 0:
+                if prev_zero:
+                    s += "零"
+                s += digits[d] + units[i]
+                prev_zero = False
+            else:
+                prev_zero = s != ""
+        if s.startswith("一十"):
+            s = s[1:]
+        return s
+
+    # Build result high-to-low
+    result = ""
+    for i in range(len(segs) - 1, -1, -1):
+        s = _seg_cn(segs[i])
+        if not s:
+            continue
+        # Need 零 after this segment's unit if next lower segment starts below 千
+        need_zero = False
+        if i > 0:
+            for j in range(i - 1, -1, -1):
+                if segs[j] > 0:
+                    need_zero = segs[j] < 1000
+                    break
+        result += s + big_units[i]
+        if need_zero:
+            result += "零"
+    return result
+
+
 def normalize_for_tts(text):
     """Normalize text so TTS reads all-caps words properly instead of letter-by-letter."""
     import re as _re
@@ -1277,23 +1329,33 @@ def generate_narration(name, weekly_stars, total_stars, language, description, f
     # S2: Project name (visual only, name spoken as part of flow)
     p2 = f" {name}。"
 
+    # Convert star counts to Chinese numerals for natural TTS reading
+    def _star_cn(val_str):
+        try:
+            n = int(str(val_str).replace(",", ""))
+            return _number_to_chinese(n)
+        except (ValueError, TypeError):
+            return str(val_str)
+    total_cn = _star_cn(total_stars)
+    weekly_cn = _star_cn(weekly_stars) if weekly_stars else ""
+
     has_weekly = weekly_stars and weekly_stars not in ('?', '0')
     if has_weekly:
         parts.append(p2)
         cues["s3_screenshot"] = len("".join(parts))
         # S3: Weekly stars
-        p3 = f"本周获得{weekly_stars}颗星。"
+        p3 = f"本周获得{weekly_cn}颗星。"
         parts.append(p3)
         cues["s4_starzoom"] = len("".join(parts))
         # S4: Total stars
-        p4 = f"，总计{total_stars}颗星。"
+        p4 = f"，总计{total_cn}颗星。"
         parts.append(p4)
     else:
         # No weekly data — S3 uses total stars, S4 is visual-only (star zoom)
         parts.append(p2)
         cues["s3_screenshot"] = len("".join(parts))
         # S3: Total stars
-        p3 = f"总计{total_stars}颗星。"
+        p3 = f"总计{total_cn}颗星。"
         parts.append(p3)
         cues["s4_starzoom"] = len("".join(parts))
         # S4: brief filler so star zoom scene has audio
