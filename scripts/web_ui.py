@@ -768,12 +768,46 @@ def save_props(data: dict):
 
 # ── Helpers ────────────────────────────────────────────────────────────────
 
+def _strip_html(text):
+    """Remove HTML tags and entities, keeping only readable content."""
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
+    text = re.sub(r"<(?:br|p|/p|/div|/li|/tr)\s*/?>", " ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    text = text.replace("&quot;", '"').replace("&#39;", "'").replace("&apos;", "'")
+    text = text.replace("&nbsp;", " ").replace("&#x27;", "'")
+    text = re.sub(r"&#?\w+;", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
 def _clean_md(text):
-    """Strip markdown formatting from text."""
+    """Strip markdown formatting and HTML tags from text."""
+    text = _strip_html(text)
     text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
     text = re.sub(r"[*_~`]", "", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
+
+
+def _normalize_heading(text):
+    """Strip emoji, markdown formatting, and extra whitespace from a heading."""
+    import re as _re
+    # Remove emoji and special unicode symbols
+    text = _re.sub(r'[\U0001F300-\U0001F9FF☀-➿⭐✅❌✨❤⬆→➡⚙⚡✨]', '', text)
+    text = _re.sub(r'[^\w\s一-鿿぀-ゟ゠-ヿ가-힯\-\(\)\[\]{}.,;:!?@#\$%^&*+=/\\|~`\'"]', '', text)
+    text = _re.sub(r'[*_`#]', '', text)
+    text = _re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+def _heading_contains(heading, terms):
+    """Check if a heading contains any of the given terms (case-insensitive)."""
+    h = heading.lower()
+    for term in terms:
+        if term.lower() in h:
+            return True
+    return False
 
 
 def _is_skip_heading(heading):
@@ -786,13 +820,12 @@ def _is_skip_heading(heading):
         "faq", "troubleshooting", "acknowledgments", "credits",
         "table of contents", "contents", "categories", "目录",
         "creating", "create", "join the community", "join",
-        "community", "support", "help",
+        "community", "support", "help", "related", "resources",
     }
     h = heading.lower().strip()
     if h in skip_words:
         return True
-    # Skip headings that start with these patterns
-    for prefix in ["using ", "creating ", "how to ", "getting ", "join "]:
+    for prefix in ["using ", "creating ", "how to ", "getting ", "join ", "related "]:
         if h.startswith(prefix):
             return True
     return False
@@ -801,31 +834,53 @@ def _is_skip_heading(heading):
 def extract_chinese_description(readme_text, fallback_desc, topics):
     """Extract project core value proposition for Chinese narration.
 
-    Returns: {"text": str, "heading": str}
-      - text: Chinese description of what the project offers
-      - heading: English heading text that was matched (for DOM targeting in screenshot)
+    Returns: {"text": str, "heading": str, "heading_index": int}
     """
     lines = readme_text.split("\n")
     import re as _re
 
-    tagline = ""
-    what_is_text = ""
-    matched_heading = ""  # English heading that provided the best content
-    categories = []  # {name, count}
-
-    # ── Pass 1: find core value sections — priority: what you get > why > about > highlights ──
-    value_patterns = [
-        (r"(What\s+you\s+(get|can\s+do|will\s+get|gain|learn)|Benefits?|Use\s+Cases?|能获得什么|你可以|你能做什么)", "gain"),
-        (r"(Why|Motivation|背景|动机|解决的问题)", "why"),
-        (r"(What\s+(is|are)|About|Overview|介绍|简介|概述|Background)", "about"),
-        (r"(Highlight|亮点|特色|Core\s+Features?|核心功能|主要特性)", "highlight"),
+    # ── Define heading categories ──
+    value_headings = [
+        "what you get", "what you can do", "what you will get",
+        "what you gain", "what you learn", "benefits", "use cases",
+        "能获得什么", "你可以", "你能做什么", "你能得到什么",
+        "功能介绍", "它能做什么", "有什么用", "核心价值",
+        "highlights", "亮点", "特色", "features", "功能", "主要特性",
+    ]
+    intro_headings = [
+        "what is", "what are", "about", "overview", "background",
+        "介绍", "简介", "概述", "背景", "项目介绍", "关于",
     ]
 
-    in_value_section = False
-    value_lines = []
-    section_heading = ""
-    heading_index = 0  # 1-based index of matched h2 in the README
+    tagline = ""
+    what_is_text = ""
+    matched_heading = ""
+    heading_index = 0
+
+    # ── Pass 1: find best matching section by priority ──
+    # Collect ALL h2 sections with scores
+    sections = []  # [(heading_text, heading_index, lines_list, score)]
     h2_count = 0
+    current_heading = ""
+    current_lines = []
+
+    def _finish_section():
+        nonlocal current_heading, current_lines
+        if current_lines and current_heading:
+            text = _clean_md(" ".join(current_lines))
+            if len(text) > 20:
+                h_clean = _normalize_heading(current_heading)
+                score = 0
+                if _heading_contains(h_clean, value_headings):
+                    score = 10
+                elif _heading_contains(h_clean, intro_headings):
+                    score = 5
+                elif not _is_skip_heading(h_clean):
+                    score = 2
+                if score > 0:
+                    sections.append((current_heading, h2_count, text, score, len(text)))
+        current_heading = ""
+        current_lines = []
 
     for line in lines:
         stripped = line.strip()
@@ -833,120 +888,90 @@ def extract_chinese_description(readme_text, fallback_desc, topics):
         # Blockquote tagline
         if stripped.startswith("> ") and not tagline:
             t = _clean_md(stripped[2:])
-            if not any(w in t.lower() for w in ["want ", "get started", "try it", "see how", "check out", "click here", "sign up"]):
-                if len(t) > 15:
-                    tagline = t
+            if len(t) > 15 and not any(w in t.lower() for w in
+                ["want ", "get started", "try it", "see how", "check out", "click here", "sign up"]):
+                tagline = t
 
         m = _re.match(r"^##\s+", stripped)
         if m:
+            _finish_section()
+            current_heading = stripped[2:].strip()
             h2_count += 1
-            heading = stripped[2:].strip()
-            h_clean = _re.sub(r"[*_`#]", "", heading).strip()
+            continue
 
-            # Check if this heading matches any value pattern
-            for pattern, _ in value_patterns:
-                if _re.match(pattern, h_clean, _re.IGNORECASE):
-                    in_value_section = True
-                    section_heading = heading
-                    heading_index = h2_count
-                    value_lines = []
-                    break
-            else:
-                if in_value_section:
-                    in_value_section = False
+        if current_heading and stripped and not stripped.startswith("#") and not stripped.startswith("<!--"):
+            current_lines.append(stripped)
+            if len(current_lines) > 30:  # Cap per section
+                break
 
-        if in_value_section and stripped and not stripped.startswith("#") and not stripped.startswith("<!--"):
-            value_lines.append(stripped)
-            if len(" ".join(value_lines)) > 800:
-                in_value_section = False
+    _finish_section()
 
-        if value_lines and not in_value_section and not what_is_text:
-            what_is_text = _clean_md(" ".join(value_lines))
-            matched_heading = section_heading
+    # Pick the best section: prefer value (score 10) with most content
+    sections.sort(key=lambda s: (s[3], s[4]), reverse=True)
+    if sections:
+        best = sections[0]
+        what_is_text = best[2]
+        matched_heading = best[0]
+        heading_index = best[1]
 
-    # Handle case where value section extends to end of README
-    if value_lines and not what_is_text:
-        what_is_text = _clean_md(" ".join(value_lines))
-        matched_heading = section_heading
-
-    # ── Pass 2: if no value section found, try first substantial paragraphs ──
+    # ── Pass 2: if no section found, try first substantive paragraph ──
     if not what_is_text:
-        para_lines = []
-        in_first_section = False
+        in_section = False
         for line in lines:
             stripped = line.strip()
             m = _re.match(r"^##\s+", stripped)
             if m:
-                h_clean = _re.sub(r"[*_`#]", "", stripped[2:].strip()).strip()
+                _finish_section()  # clean up
+                h_clean = _normalize_heading(stripped[2:].strip())
                 if _is_skip_heading(h_clean):
-                    if in_first_section:
-                        break
+                    in_section = False
                     continue
-                if in_first_section:
+                if in_section:
                     break
-                in_first_section = True
-                section_heading = stripped[2:].strip()
+                in_section = True
+                current_heading = stripped[2:].strip()
+                current_lines = []
                 continue
-            if in_first_section and stripped and not stripped.startswith("#") and not stripped.startswith("<!--") and not stripped.startswith(">"):
-                para_lines.append(stripped)
-                if len(" ".join(para_lines)) > 600:
+            if in_section and stripped and not stripped.startswith("#") and not stripped.startswith("<!--") and not stripped.startswith(">"):
+                current_lines.append(stripped)
+                if len(" ".join(current_lines)) > 600:
                     break
-        if para_lines:
-            what_is_text = _clean_md(" ".join(para_lines))
-            matched_heading = section_heading
+        if current_lines:
+            what_is_text = _clean_md(" ".join(current_lines))
+            matched_heading = current_heading
 
-    # ── Pass 3: find categories and their items ──
-    in_skills_section = False
+    # ── Pass 3: count categories for awesome-list projects ──
+    categories = []
     current_cat = None
-
     for line in lines:
         stripped = line.strip()
-        m2 = _re.match(r"^##\s+", stripped)
-        m3 = _re.match(r"^###\s+", stripped)
-
-        if m3 and in_skills_section:
-            name = _clean_md(stripped[3:].strip())
-            if not _is_skip_heading(name) and not name.startswith("What"):
+        if _re.match(r"^###\s+", stripped):
+            name = _normalize_heading(stripped[3:].strip())
+            if name and not _is_skip_heading(name):
                 current_cat = {"name": name, "count": 0}
                 categories.append(current_cat)
             continue
-
-        if m3 and not in_skills_section:
-            continue
-
-        if m2:
-            h_clean = _re.sub(r"[*_`#]", "", stripped[2:].strip()).strip()
-            if _is_skip_heading(h_clean) or h_clean.startswith("?") or h_clean.startswith("What"):
-                in_skills_section = False
+        if _re.match(r"^##\s+", stripped):
+            h_clean = _normalize_heading(stripped[2:].strip())
+            if _heading_contains(h_clean, ["skill", "feature", "功能", "category", "分类"]):
                 current_cat = None
                 continue
-            if "skill" in h_clean.lower() or "feature" in h_clean.lower() or "功能" in h_clean:
-                in_skills_section = True
-                current_cat = None
-                continue
-            in_skills_section = False
-            current_cat = {"name": h_clean, "count": 0}
-            categories.append(current_cat)
-
-        # Count items
-        if current_cat and _re.match(r"^[-*]\s+\[.+\]", stripped):
+            current_cat = None
+        if current_cat and _re.match(r"^[-*]\s+", stripped) and len(stripped) > 8:
             current_cat["count"] += 1
-        elif current_cat and _re.match(r"^[-*]\s+", stripped) and len(stripped) > 8:
-            if not stripped.startswith("- ["):
-                current_cat["count"] += 1
 
-    # ── Build description: summarize what the project offers ──
+    # ── Build description text ──
     parts = []
-
     if what_is_text:
         what_short = what_is_text
         if len(what_is_text) > 500:
             cut = what_is_text.rfind(". ", 250, 500)
+            if cut < 150:
+                cut = what_is_text.rfind("。", 250, 500)
             what_short = what_is_text[:cut + 1] if cut > 150 else what_is_text[:500]
         translated = translate_to_chinese(what_short)
         parts.append(translated)
 
-    # Add scope if it's an awesome-list type project
     total_items = sum(c["count"] for c in categories)
     cat_names = [c["name"] for c in categories if c["count"] > 0]
     if cat_names and total_items > 0:
@@ -965,13 +990,13 @@ def extract_chinese_description(readme_text, fallback_desc, topics):
 
 
 def extract_features(readme_text):
-    """Extract features from README — handles awesome-list style with nested categories."""
+    """Extract features from README — handles awesome-list, tables, **bold** items, etc."""
     import re as _re
     features = []
     lines = readme_text.split("\n")
 
-    # Detect structure: flat ## categories or nested (## Skills → ### Category → items)
-    in_skills_section = False
+    feature_headings = ["skill", "feature", "功能", "特性", "列表", "list", "plugins"]
+    in_skills = False
     current_category = None
     category_items = []  # (category_name, item_name, item_desc)
 
@@ -981,59 +1006,67 @@ def extract_features(readme_text):
         m2 = _re.match(r"^##\s+", stripped)
         m3 = _re.match(r"^###\s+", stripped)
 
-        # ### under ## Skills → category
-        if m3 and in_skills_section:
-            name = _clean_md(stripped[3:].strip())
-            if not _is_skip_heading(name):
+        if m3:
+            name = _normalize_heading(stripped[3:].strip())
+            if name and in_skills and not _is_skip_heading(name):
                 current_category = name
             continue
 
-        if m3 and not in_skills_section:
-            # Standalone ### item under any ## category
-            if current_category:
-                item_text = _clean_md(stripped[3:].strip())
+        if m2:
+            h_clean = _normalize_heading(stripped[2:].strip())
+            if _is_skip_heading(h_clean):
+                in_skills = False
+                current_category = None
+                continue
+            if _heading_contains(h_clean, feature_headings):
+                in_skills = True
+                current_category = h_clean
+                continue
+            in_skills = False
+            current_category = h_clean
+
+        if not current_category:
+            continue
+
+        # Format: `- [name](url) - description`
+        m = _re.match(r"^[-*]\s+\[.+\]", stripped)
+        if m:
+            item_text = _clean_md(stripped)
+            if " - " in item_text:
+                iname, idesc = item_text.split(" - ", 1)
+                category_items.append((current_category, iname.strip()[:50], idesc.strip()[:100]))
+            elif len(item_text) > 4:
+                category_items.append((current_category, item_text.strip()[:50], current_category))
+            continue
+
+        # Format: `- **name** — description` or `- **name**: description`
+        m = _re.match(r"^[-*]\s+\*\*(.+?)\*\*[\s:—]*(.+)", stripped)
+        if m:
+            iname = m.group(1).strip()
+            idesc = _clean_md(m.group(2).strip())
+            category_items.append((current_category, iname[:50], idesc[:100]))
+            continue
+
+        # Format: `- name: description` or `- name - description`
+        m = _re.match(r"^[-*]\s+(.+)", stripped)
+        if m:
+            item_text = _clean_md(m.group(1))
+            if len(item_text) > 8:
                 if " - " in item_text:
                     iname, idesc = item_text.split(" - ", 1)
                 elif ": " in item_text:
                     iname, idesc = item_text.split(": ", 1)
                 else:
                     iname, idesc = item_text, current_category
-                category_items.append((current_category, iname.strip()[:40], idesc.strip()[:80]))
-            continue
+                category_items.append((current_category, iname.strip()[:50], idesc.strip()[:100]))
 
-        if m2:
-            h_clean = _re.sub(r"[*_`#]", "", stripped[2:].strip()).strip()
-            if _is_skip_heading(h_clean) or h_clean.startswith("?") or h_clean.startswith("What"):
-                in_skills_section = False
-                current_category = None
-                continue
-            if "skill" in h_clean.lower() or "feature" in h_clean.lower() or "功能" in h_clean:
-                in_skills_section = True
-                current_category = None
-                continue
-            in_skills_section = False
-            current_category = h_clean
-
-        # Bullet item: `- [name](url) - description` or `- [name/](url) - description`
-        if current_category and _re.match(r"^[-*]\s+\[.+\]", stripped):
-            item_text = _re.sub(r"^[-*]\s+", "", stripped)
-            item_text = _re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", item_text)
-            item_text = _re.sub(r"`([^`]+)`", r"\1", item_text)
-            # Remove trailing / from folder-style links
-            item_text = item_text.rstrip("/")
-            if " - " in item_text:
-                iname, idesc = item_text.split(" - ", 1)
-                category_items.append((current_category, iname.strip()[:40], idesc.strip()[:80]))
-            elif len(item_text) > 4:
-                category_items.append((current_category, item_text.strip()[:40], current_category))
-
-        # Plain bullet under category (non-link)
-        if current_category and _re.match(r"^[-*]\s+", stripped) and not _re.match(r"^[-*]\s+\[", stripped):
-            item_text = _clean_md(_re.sub(r"^[-*]\s+", "", stripped))
-            if len(item_text) > 8:
-                if " - " in item_text:
-                    iname, idesc = item_text.split(" - ", 1)
-                    category_items.append((current_category, iname.strip()[:40], idesc.strip()[:80]))
+        # Table row: `| name | description |`
+        m = _re.match(r"^\|\s*(.+?)\s*\|\s*(.+?)\s*\|", stripped)
+        if m and not _re.match(r"^[\|\s\-:]+$", stripped):
+            iname = _clean_md(m.group(1))
+            idesc = _clean_md(m.group(2))
+            if iname and not _heading_contains(iname, ["name", "名称", "feature"]):
+                category_items.append((current_category, iname[:50], idesc[:100]))
 
     # Build features, pick diverse items across categories
     if category_items:
@@ -1101,12 +1134,12 @@ def extract_how_it_works(readme_text):
     lines = readme_text.split("\n")
     import re as _re
 
-    patterns = [
-        r"(How\s+(it|does\s+it|this)\s+(works?|work)|How\s+to\s+use)",
-        r"(Architecture|System\s+Design|Design\s+Overview)",
-        r"(Workflow|Pipeline|Process|Flow)",
-        r"(工作原理|工作流程|怎么用|如何使用|使用方法|实现原理)",
-        r"(Getting\s+Started|Quick\s+Start|Quickstart)",
+    how_it_works_terms = [
+        "how it works", "how does it work", "how this works", "how to use",
+        "architecture", "system design", "design overview",
+        "workflow", "pipeline", "process", "flow",
+        "工作原理", "工作流程", "怎么用", "如何使用", "使用方法", "实现原理",
+        "getting started", "quick start", "quickstart",
     ]
 
     h2_count = 0
@@ -1121,16 +1154,14 @@ def extract_how_it_works(readme_text):
         if m:
             h2_count += 1
             heading = stripped[2:].strip()
-            h_clean = _re.sub(r"[*_`#]", "", heading).strip()
+            h_clean = _normalize_heading(heading)
             if in_target:
                 in_target = False
-            for pat in patterns:
-                if _re.match(pat, h_clean, _re.IGNORECASE):
-                    in_target = True
-                    target_heading = heading
-                    target_heading_index = h2_count
-                    target_lines = []
-                    break
+            if _heading_contains(h_clean, how_it_works_terms):
+                in_target = True
+                target_heading = heading
+                target_heading_index = h2_count
+                target_lines = []
 
         if in_target and stripped and not stripped.startswith("#") and not stripped.startswith("<!--"):
             target_lines.append(stripped)
@@ -1251,894 +1282,34 @@ def generate_narration(name, weekly_stars, total_stars, language, description, f
 
 # ── HTML ───────────────────────────────────────────────────────────────────
 
-HTML_TEMPLATE = r"""<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GitHub Trending · Video Studio</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-:root {
-  --bg: #fafaf8; --surface: #ffffff; --elevated: #f3f3f0;
-  --border: #e4e4df; --border-light: #d8d8d2;
-  --gold: #c8880a; --gold-dim: #a07008; --amber: #d97706;
-  --text: #1a1a1e; --text-secondary: #5e5e68; --text-muted: #94949e;
-  --accent: #4f46e5; --green: #16a34a; --red: #dc2626;
-  --radius: 12px; --radius-sm: 8px;
-}
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body {
-  font-family: 'DM Sans', -apple-system, sans-serif;
-  background: var(--bg);
-  color: var(--text);
-  min-height: 100vh;
-  -webkit-font-smoothing: antialiased;
-}
-body::before {
-  content: ''; position: fixed; inset: 0; pointer-events: none; z-index: 0;
-  background:
-    radial-gradient(ellipse 80% 50% at 50% -20%, rgba(79,70,229,0.04), transparent),
-    radial-gradient(ellipse 60% 40% at 80% 80%, rgba(200,136,10,0.03), transparent);
-}
+TEMPLATE_DIR = os.path.join(SKILL_DIR, "templates")
+INDEX_HTML = os.path.join(TEMPLATE_DIR, "index.html")
 
-/* ── Header ──────────────────────────── */
-header {
-  position: sticky; top: 0; z-index: 100;
-  backdrop-filter: blur(20px) saturate(180%);
-  background: rgba(250,250,248,0.88);
-  border-bottom: 1px solid var(--border);
-  padding: 16px 32px;
-  display: flex; align-items: center; gap: 16px;
-}
-header .logo {
-  font-family: 'DM Serif Display', serif;
-  font-size: 20px; font-weight: 400; letter-spacing: -0.01em;
-  background: linear-gradient(135deg, var(--gold) 0%, var(--amber) 50%, #fbbf24 100%);
-  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
-}
-header .sep { width: 1px; height: 24px; background: var(--border); }
-header .page-title { font-size: 13px; color: var(--text-secondary); font-weight: 500; }
-header .actions { margin-left: auto; display: flex; gap: 8px; }
+def get_html_template(server_ip=""):
+    """Read the SPA template from file, replacing placeholders."""
+    with open(INDEX_HTML, "r", encoding="utf-8") as f:
+        html = f.read()
+    if server_ip:
+        html = html.replace("__SERVER_IP__", server_ip)
+    return html
 
-/* ── Buttons ─────────────────────────── */
-.btn {
-  font-family: 'DM Sans', sans-serif;
-  padding: 10px 20px; border-radius: var(--radius-sm); border: 1px solid var(--border-light);
-  font-size: 13px; font-weight: 500; cursor: pointer;
-  transition: all 0.2s ease;
-  background: var(--elevated); color: var(--text);
-  letter-spacing: 0.01em;
-}
-.btn:hover { border-color: var(--text-secondary); transform: translateY(-1px); box-shadow: 0 4px 16px rgba(0,0,0,0.06); }
-.btn:active { transform: translateY(0); }
-.btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; box-shadow: none; }
-.btn-sm { padding: 7px 14px; font-size: 12px; }
-.btn-primary { background: var(--accent); color: #fff; border-color: var(--accent); }
-.btn-primary:hover { box-shadow: 0 4px 20px rgba(79,70,229,0.2); }
-.btn-success { background: var(--green); color: #fff; border-color: var(--green); font-weight: 600; }
-.btn-success:hover { box-shadow: 0 4px 20px rgba(22,163,74,0.2); }
-.btn-gold { background: var(--gold); color: #fff; border-color: transparent; font-weight: 600; }
-.btn-gold:hover { box-shadow: 0 4px 20px rgba(200,136,10,0.25); }
-.btn-ghost { background: transparent; border-color: transparent; color: var(--text-secondary); }
-.btn-ghost:hover { background: var(--elevated); border-color: var(--border); }
-
-/* ── Status Bar ──────────────────────── */
-.status-bar {
-  position: fixed; bottom: 0; width: 100%; z-index: 100;
-  padding: 10px 32px; font-size: 12px; color: var(--text-muted);
-  display: flex; align-items: center; gap: 10px;
-  backdrop-filter: blur(20px);
-  background: rgba(250,250,248,0.88);
-  border-top: 1px solid var(--border);
-}
-.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-muted); flex-shrink: 0; transition: all 0.3s; }
-.dot.active { background: var(--green); box-shadow: 0 0 8px rgba(34,197,94,0.5); }
-.dot.error { background: var(--red); box-shadow: 0 0 8px rgba(239,68,68,0.5); }
-
-/* ── List View ───────────────────────── */
-#listView { padding: 40px 32px; max-width: 1320px; margin: 0 auto; position: relative; z-index: 1; }
-.list-header { margin-bottom: 32px; }
-.list-header h2 { font-family: 'DM Serif Display', serif; font-size: 36px; font-weight: 400; letter-spacing: -0.02em; margin-bottom: 6px; }
-.list-header .subtitle { color: var(--text-secondary); font-size: 14px; }
-.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(380px, 1fr)); gap: 18px; }
-.repo-card {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 24px;
-  display: flex; flex-direction: column; gap: 14px;
-  transition: all 0.25s ease;
-  position: relative; overflow: hidden;
-}
-.repo-card::before {
-  content: ''; position: absolute; inset: 0; opacity: 0; transition: opacity 0.25s;
-  background: radial-gradient(ellipse at 0% 0%, rgba(79,70,229,0.05), transparent 70%);
-}
-.repo-card:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,0,0,0.06); }
-.repo-card:hover::before { opacity: 1; }
-.repo-card .r-name {
-  font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 600;
-  color: var(--text); position: relative; z-index: 1;
-}
-.repo-card .r-owner { font-size: 12px; color: var(--text-muted); margin-top: -8px; position: relative; z-index: 1; }
-.repo-card .r-desc { font-size: 13px; color: var(--text-secondary); line-height: 1.6; flex: 1; position: relative; z-index: 1; }
-.repo-card .r-stats { display: flex; gap: 16px; align-items: center; font-size: 12px; color: var(--text-muted); position: relative; z-index: 1; }
-.repo-card .r-stats .stat { display: flex; align-items: center; gap: 4px; }
-.repo-card .r-stats .stat.stars { color: var(--gold); font-weight: 600; }
-.repo-card .r-lang {
-  font-size: 10px; padding: 2px 10px; border-radius: 20px;
-  background: rgba(79,70,229,0.08); color: var(--accent);
-  font-weight: 500; letter-spacing: 0.03em; text-transform: uppercase;
-}
-.repo-card .r-action { position: relative; z-index: 1; }
-
-/* ── Hero Refresh (landing state) ────── */
-.hero-refresh {
-  display: flex; flex-direction: column; align-items: center; justify-content: center;
-  min-height: 60vh; text-align: center; gap: 16px;
-  animation: fadeUp 0.6s ease both;
-}
-.hero-refresh .hero-icon { font-size: 56px; margin-bottom: 8px; }
-.hero-refresh h2 { font-family: 'DM Serif Display', serif; font-size: 36px; font-weight: 400; letter-spacing: -0.02em; }
-.hero-refresh p { color: var(--text-secondary); font-size: 15px; max-width: 360px; line-height: 1.6; }
-.btn-lg { padding: 14px 36px; font-size: 15px; border-radius: var(--radius); font-weight: 600; }
-
-/* ── URL Input ─────────────────────────── */
-.url-input-row {
-  display: flex; gap: 10px; align-items: center;
-  margin-top: 8px; width: 100%; max-width: 520px;
-}
-.url-input-row .url-sep {
-  font-size: 12px; color: var(--text-muted); white-space: nowrap;
-  font-weight: 500; letter-spacing: 0.02em;
-}
-.url-input-field {
-  flex: 1; padding: 12px 16px; border-radius: var(--radius-sm);
-  border: 1px solid var(--border-light); background: var(--surface);
-  font-size: 13px; font-family: 'JetBrains Mono', monospace;
-  color: var(--text); transition: border-color 0.2s;
-}
-.url-input-field:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px rgba(79,70,229,0.1); }
-.url-input-field::placeholder { color: var(--text-muted); font-family: 'DM Sans', sans-serif; font-size: 12px; }
-.url-input-row .btn-url { white-space: nowrap; }
-
-/* ── Editor View ─────────────────────── */
-#editorView { display: none; padding: 32px; max-width: 1440px; margin: 0 auto; position: relative; z-index: 1; }
-.back-row { margin-bottom: 20px; }
-.editor-grid { display: grid; grid-template-columns: 1fr 1.6fr; gap: 24px; margin-bottom: 32px; }
-.panel {
-  background: var(--surface); border: 1px solid var(--border);
-  border-radius: var(--radius); padding: 24px;
-}
-.panel-hd { font-family: 'DM Sans', sans-serif; font-size: 11px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
-.panel-hd::after { content: ''; flex: 1; height: 1px; background: var(--border); }
-.shot-wrap { margin-bottom: 14px; }
-.shot-label { font-size: 10px; color: var(--text-muted); margin-bottom: 6px; display: flex; align-items: center; gap: 6px; }
-.shot-label .dot-indicator { width: 6px; height: 6px; border-radius: 50%; }
-.shot-label .dot-indicator.top { background: var(--gold); }
-.shot-label .dot-indicator.intro { background: var(--accent); }
-.screenshot-img { width: 100%; border-radius: var(--radius-sm); border: 1px solid var(--border); transition: box-shadow 0.2s; }
-.screenshot-img:hover { box-shadow: 0 0 0 2px var(--accent); }
-.meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 16px; }
-.meta-cell {
-  background: var(--elevated); border-radius: var(--radius-sm); padding: 14px 16px;
-  border: 1px solid transparent; transition: border-color 0.2s;
-}
-.meta-cell:hover { border-color: var(--border); }
-.meta-cell .m-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 4px; font-weight: 600; }
-.meta-cell .m-value { font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 600; color: var(--text); }
-.meta-cell .m-value.gold { color: var(--gold); }
-.feature-edit { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
-.feature-row { display: flex; gap: 8px; align-items: center; }
-.feature-row input {
-  background: var(--elevated); border: 1px solid var(--border);
-  border-radius: 6px; color: var(--text); padding: 8px 10px;
-  font-size: 12px; font-family: 'DM Sans', sans-serif;
-  transition: border-color 0.2s;
-}
-.feature-row input:focus { border-color: var(--accent); outline: none; }
-.feature-row input.f-icon { width: 42px; text-align: center; font-size: 16px; }
-.feature-row input.f-name { width: 140px; font-family: 'JetBrains Mono', monospace; font-size: 11px; }
-.feature-row input.f-desc { flex: 1; }
-.action-bar { display: flex; gap: 10px; margin-top: 20px; flex-wrap: wrap; }
-audio { width: 100%; margin-top: 14px; border-radius: var(--radius-sm); }
-.empty-state { color: var(--text-muted); text-align: center; padding: 80px 20px; }
-.empty-state .empty-icon { font-size: 48px; margin-bottom: 16px; opacity: 0.4; }
-.empty-state h3 { font-size: 18px; margin-bottom: 6px; color: var(--text-secondary); }
-
-/* ── Scene Rows (right panel) ────────── */
-.scene-row {
-  background: var(--elevated); border-radius: var(--radius-sm);
-  overflow: hidden; transition: border-color 0.2s;
-}
-.scene-row:hover { background: var(--surface); }
-.scene-row .sc-row-hd {
-  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
-}
-.scene-row .sc-row-num {
-  font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 700;
-  padding: 2px 8px; border-radius: 4px; flex-shrink: 0;
-}
-.scene-row .sc-row-name { font-size: 12px; font-weight: 600; color: var(--text); }
-.scene-row .sc-row-time { margin-left: auto; font-size: 10px; color: var(--text-muted); font-family: 'JetBrains Mono', monospace; }
-.scene-row .sc-row-body { display: flex; gap: 10px; padding: 0 12px 10px 12px; align-items: flex-start; }
-.scene-row .sc-row-thumb { width: 80px; height: 48px; object-fit: cover; border-radius: 4px; flex-shrink: 0; border: 1px solid var(--border); }
-.scene-row .sc-row-text {
-  flex: 1; min-height: 48px; background: var(--surface);
-  border: 1px solid var(--border); border-radius: 6px;
-  color: var(--text); padding: 8px 10px; font-size: 12px;
-  resize: vertical; font-family: 'DM Sans', sans-serif; line-height: 1.5;
-  transition: border-color 0.2s;
-}
-.scene-row .sc-row-text:focus { border-color: var(--accent); outline: none; }
-
-@keyframes fadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: translateY(0); } }
-/* Modal */
-.modal-overlay { display:none; position:fixed; inset:0; z-index:1000; background:rgba(0,0,0,0.5); backdrop-filter:blur(4px); justify-content:center; align-items:center; }
-.modal-overlay.show { display:flex; }
-.modal-box { background:var(--surface); border-radius:var(--radius); padding:40px 56px; text-align:center; box-shadow:0 20px 60px rgba(0,0,0,0.2); max-width:480px; }
-.modal-box .modal-icon { font-size:40px; margin-bottom:16px; animation:spin 2s linear infinite; }
-.modal-box .modal-title { font-family:'DM Serif Display',serif; font-size:20px; margin-bottom:8px; color:var(--text); }
-.modal-box .modal-sub { font-size:13px; color:var(--text-secondary); }
-@keyframes spin { 100% { transform:rotate(360deg); } }
-</style>
-</head>
-<body>
-
-<header>
-  <div class="logo">Trending Studio</div>
-  <div class="sep"></div>
-  <span class="page-title" id="pageTitle">Projects</span>
-  <div class="actions">
-    <button class="btn btn-sm btn-ghost" id="btnRefresh" onclick="refreshTrending()">↻ Refresh</button>
-  </div>
-</header>
-
-<!-- ─── LIST VIEW ──────────────────────────────────────────────── -->
-<div id="listView">
-  <div class="list-header" style="display:none">
-    <h2>Trending Projects</h2>
-    <p class="subtitle">Select a repository to produce a promotional video</p>
-  </div>
-  <div id="listContent">
-    <div class="hero-refresh">
-      <div class="hero-icon">🔥</div>
-      <h2>GitHub Trending</h2>
-      <p>Fetch the latest trending repositories, then choose one to produce a promotional video</p>
-      <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">
-        <button class="btn btn-gold btn-lg" id="btnHeroRefresh" onclick="refreshTrending()">Refresh GitHub Trending</button>
-        <button class="btn btn-primary btn-lg" id="btnHeroShowCached" onclick="showCachedTrending()">Already Fetched · Show Skills</button>
-      </div>
-      <div class="url-input-row">
-        <span class="url-sep">or paste a GitHub URL</span>
-        <input class="url-input-field" id="urlInput" type="text" placeholder="https://github.com/owner/repo" onkeydown="if(event.key==='Enter')generateFromUrl()">
-        <button class="btn btn-gold btn-url" id="btnUrlGenerate" onclick="generateFromUrl()">Generate Video</button>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ─── EDITOR VIEW ─────────────────────────────────────────────── -->
-<div id="editorView">
-  <div class="back-row">
-    <button class="btn btn-sm btn-ghost" onclick="showList()">← Back to Projects</button>
-  </div>
-  <div class="editor-grid">
-    <!-- Left: Screenshots -->
-    <div class="panel">
-      <div class="panel-hd">Screenshots</div>
-      <div class="shot-wrap">
-        <div class="shot-label"><span class="dot-indicator top"></span> Top · Header & Stars</div>
-        <img class="screenshot-img" id="screenshotTop" src="" alt="Top" onerror="this.style.display='none'">
-      </div>
-      <div class="shot-wrap">
-        <div class="shot-label"><span class="dot-indicator intro"></span> Intro · README (S5)</div>
-        <img class="screenshot-img" id="screenshotIntro" src="" alt="Intro" onerror="this.style.display='none'">
-      </div>
-      <div class="shot-wrap" id="s6ShotWrap" style="display:none">
-        <div class="shot-label"><span class="dot-indicator intro" style="background:var(--green)"></span> How It Works (S6)</div>
-        <img class="screenshot-img" id="screenshotS6" src="" alt="S6" onerror="this.style.display='none'">
-      </div>
-      <div id="noScreenshot" style="color:var(--text-muted);padding:30px;text-align:center;font-size:13px">No screenshots yet</div>
-      <div style="margin-top:16px">
-        <button class="btn btn-sm btn-gold" id="btnScreenshot" onclick="takeScreenshot()">Take Screenshots</button>
-      </div>
-    </div>
-
-    <!-- Right: Project info + Features + Scene Timeline + Actions -->
-    <div class="panel" style="display:flex;flex-direction:column">
-      <div class="panel-hd">Project · <span id="repoBadge" style="text-transform:none;font-weight:400">—</span></div>
-      <div class="meta-grid" id="meta"></div>
-
-      <div class="panel-hd">Features</div>
-      <div class="feature-edit" id="featuresEdit"></div>
-
-      <div class="panel-hd" style="margin-top:8px">Scene Narration <span style="text-transform:none;font-weight:400;color:var(--text-muted)">— edit text for voice</span></div>
-      <div id="sceneTimeline" style="flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;min-height:200px"></div>
-      <div class="action-bar" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border)">
-        <button class="btn btn-primary" id="btnGenerate" onclick="generateAudio()">Generate Voice</button>
-        <button class="btn" id="btnPreview" onclick="previewRemotion()">Preview</button>
-        <button class="btn btn-success" id="btnBuild" onclick="buildVideo()">Build Video</button>
-      </div>
-      <audio id="audioPlayer" controls style="display:none;margin-top:12px"></audio>
-    </div>
-  </div>
-</div>
-
-<div class="status-bar">
-  <span class="dot" id="statusDot"></span>
-  <span id="statusText">Ready</span>
-</div>
-
-<!-- Modal overlay -->
-<div class="modal-overlay" id="modalOverlay">
-  <div class="modal-box">
-    <div class="modal-icon">🎙️</div>
-    <div class="modal-title" id="modalTitle">Generating Voice</div>
-    <div class="modal-sub" id="modalSub">Once finished, Remotion Studio will open automatically</div>
-  </div>
-</div>
-
-<script>
-const SERVER_IP = '__SERVER_IP__';
-let props = {};
-let currentView = 'list';
-
-function setStatus(msg, type) {
-  document.getElementById('statusText').textContent = msg;
-  const dot = document.getElementById('statusDot');
-  dot.className = 'dot' + (type === 'error' ? ' error' : type === 'active' ? ' active' : '');
-}
-
-// ── View switching ──────────────────────────────────────────────
-function showList() {
-  currentView = 'list';
-  document.getElementById('listView').style.display = 'block';
-  document.getElementById('editorView').style.display = 'none';
-  document.querySelector('.page-title').textContent = 'Projects';
-  const url = new URL(window.location);
-  url.searchParams.delete('repo');
-  window.history.pushState({}, '', url);
-  // Only show grid if we already have cached data, otherwise keep hero
-  loadTrending();
-}
-
-function showEditor(repo) {
-  currentView = 'editor';
-  document.getElementById('listView').style.display = 'none';
-  document.getElementById('editorView').style.display = 'block';
-  document.querySelector('.page-title').textContent = repo.split('/').pop();
-  const url = new URL(window.location);
-  url.searchParams.set('repo', repo);
-  window.history.pushState({}, '', url);
-  selectProject(repo);
-}
-
-// ── List: load trending ─────────────────────────────────────────
-function showHeroRefresh() {
-  document.querySelector('#listView .list-header').style.display = 'none';
-  document.getElementById('listContent').innerHTML =
-    '<div class="hero-refresh">' +
-      '<div class="hero-icon">🔥</div>' +
-      '<h2>GitHub Trending</h2>' +
-      '<p>Fetch the latest trending repositories, then choose one to produce a promotional video</p>' +
-      '<div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">' +
-        '<button class="btn btn-gold btn-lg" id="btnHeroRefresh" onclick="refreshTrending()">Refresh GitHub Trending</button>' +
-        '<button class="btn btn-primary btn-lg" id="btnHeroShowCached" onclick="showCachedTrending()">Already Fetched · Show Skills</button>' +
-      '</div>' +
-      '<div class="url-input-row">' +
-        '<span class="url-sep">or paste a GitHub URL</span>' +
-        '<input class="url-input-field" id="urlInput" type="text" placeholder="https://github.com/owner/repo" onkeydown="if(event.key===\'Enter\')generateFromUrl()">' +
-        '<button class="btn btn-gold btn-url" id="btnUrlGenerate" onclick="generateFromUrl()">Generate Video</button>' +
-      '</div>' +
-    '</div>';
-}
-
-function showCachedTrending() {
-  loadTrending();
-}
-
-function generateFromUrl() {
-  const input = document.getElementById('urlInput');
-  const raw = (input.value || '').trim();
-  if (!raw) {
-    setStatus('Please paste a GitHub URL first', 'error');
-    return;
-  }
-  // Parse owner/repo from GitHub URL. Supported formats:
-  //   https://github.com/owner/repo[/...]
-  //   github.com/owner/repo[/...]
-  //   owner/repo
-  let match = raw.match(/github\.com\/([^\/]+\/[^\/]+)/i);
-  if (match) {
-    showEditor(match[1]);
-    return;
-  }
-  match = raw.match(/^([^\/\s]+\/[^\/\s]+)$/);
-  if (match) {
-    showEditor(match[1]);
-    return;
-  }
-  setStatus('Invalid GitHub URL — use format: https://github.com/owner/repo', 'error');
-}
-
-async function loadTrending() {
-  try {
-    const r = await fetch('/api/trending');
-    const repos = await r.json();
-    if (!repos.length) {
-      showHeroRefresh();
-      return;
-    }
-    document.querySelector('#listView .list-header').style.display = '';
-    let html = '<div class="grid">';
-    repos.forEach((repo, idx) => {
-      const stars = repo.stars_weekly !== '?' ? repo.stars_weekly : '';
-      const shortName = repo.full_name.split('/').pop();
-      html += '<div class="repo-card" style="animation: fadeUp 0.4s ' + (idx * 0.06) + 's both">' +
-        '<div class="r-name">' + esc(shortName) + '</div>' +
-        '<div class="r-owner">' + esc(repo.full_name) + '</div>' +
-        '<div class="r-desc">' + esc(repo.description || 'No description') + '</div>' +
-        '<div class="r-stats">' +
-          (stars ? '<span class="stat stars">⭐ ' + esc(stars) + ' /wk</span>' : '') +
-          '<span class="stat">⭐ ' + esc(repo.stars_total || '?') + '</span>' +
-          '<span class="r-lang">' + esc(repo.language || '?') + '</span>' +
-        '</div>' +
-        '<div class="r-action">' +
-          '<button class="btn btn-sm btn-primary" onclick="showEditor(\'' + esc(repo.full_name) + '\')">Generate Video</button>' +
-        '</div>' +
-      '</div>';
-    });
-    html += '</div>';
-    document.getElementById('listContent').innerHTML = html;
-  } catch(e) {
-    setStatus('Failed to load trending: ' + e.message, 'error');
-  }
-}
-
-function disableRefreshButtons(disabled, text) {
-  ['btnRefresh', 'btnHeroRefresh'].forEach(id => {
-    const btn = document.getElementById(id);
-    if (btn) { btn.disabled = disabled; btn.textContent = text; }
-  });
-}
-
-async function refreshTrending() {
-  disableRefreshButtons(true, 'Fetching...');
-  setStatus('Fetching GitHub Trending...', 'active');
-  try {
-    await fetch('/api/trending/fetch');
-    // Poll for completion
-    const interval = setInterval(async () => {
-      const r = await fetch('/api/trending');
-      const repos = await r.json();
-      if (repos.length > 0) {
-        clearInterval(interval);
-        disableRefreshButtons(false, '↻ Refresh');
-        setStatus('Fetched ' + repos.length + ' projects', 'active');
-        loadTrending();
-      }
-    }, 2000);
-    setTimeout(() => { clearInterval(interval); disableRefreshButtons(false, '↻ Refresh'); }, 30000);
-  } catch(e) {
-    setStatus('Fetch failed: ' + e.message, 'error');
-    disableRefreshButtons(false, '↻ Refresh');
-  }
-}
-
-// ── Editor: select & load project ────────────────────────────────
-async function selectProject(repo) {
-  setStatus('Fetching repo details...', 'active');
-  // Find weekly stars from trending data
-  let starsWeekly = '?';
-  try {
-    const r = await fetch('/api/trending');
-    const repos = await r.json();
-    const found = repos.find(x => x.full_name === repo);
-    if (found) starsWeekly = found.stars_weekly || '?';
-  } catch(e) {}
-
-  try {
-    const r = await fetch('/api/select-project', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({repo, stars_weekly: starsWeekly})
-    });
-    if (!r.ok) throw new Error((await r.json()).detail);
-    props = await r.json();
-    renderEditor();
-    setStatus('Ready', '');
-    // Auto-take screenshot
-    setTimeout(() => takeScreenshot(), 500);
-  } catch(e) {
-    setStatus('Error: ' + e.message, 'error');
-  }
-}
-
-function renderEditor() {
-  const displayName = (props.name || props.repo || '').split('/').pop();
-  document.getElementById('repoBadge').textContent = displayName;
-  document.querySelector('.page-title').textContent = displayName;
-
-  if (props.screenshot) {
-    document.getElementById('screenshotTop').src = '/public/' + props.screenshot;
-    document.getElementById('screenshotTop').style.display = 'block';
-    document.getElementById('noScreenshot').style.display = 'none';
-  } else {
-    document.getElementById('screenshotTop').style.display = 'none';
-    document.getElementById('noScreenshot').style.display = 'block';
-  }
-  if (props.screenshotIntro) {
-    document.getElementById('screenshotIntro').src = '/public/' + props.screenshotIntro;
-    document.getElementById('screenshotIntro').style.display = 'block';
-  } else {
-    document.getElementById('screenshotIntro').style.display = 'none';
-  }
-  if (props.s6Screenshot) {
-    document.getElementById('screenshotS6').src = '/public/' + props.s6Screenshot;
-    document.getElementById('screenshotS6').style.display = 'block';
-    document.getElementById('s6ShotWrap').style.display = '';
-  } else {
-    document.getElementById('screenshotS6').style.display = 'none';
-    document.getElementById('s6ShotWrap').style.display = 'none';
-  }
-
-  let meta = '';
-  if (props.totalStars) meta += '<div class="meta-cell"><div class="m-label">Total Stars</div><div class="m-value gold">⭐ ' + esc(props.totalStars) + '</div></div>';
-  if (props.weeklyStars && props.weeklyStars !== '?') meta += '<div class="meta-cell"><div class="m-label">This Week</div><div class="m-value">🔥 +' + esc(props.weeklyStars) + '</div></div>';
-  if (props.language) meta += '<div class="meta-cell"><div class="m-label">Language</div><div class="m-value">' + esc(props.language) + '</div></div>';
-  if (props.author) meta += '<div class="meta-cell"><div class="m-label">Author</div><div class="m-value" style="font-size:14px">' + esc(props.author) + '</div></div>';
-  if (props.chineseDesc) meta += '<div class="meta-cell" style="grid-column:1/-1"><div class="m-label">Introduction</div><div class="m-value" style="font-size:12px;font-weight:400;font-family:\'DM Sans\',sans-serif">' + esc(props.chineseDesc) + '</div></div>';
-  document.getElementById('meta').innerHTML = meta;
-
-  // Editable features
-  let featsHtml = '';
-  (props.features || []).forEach((f, i) => {
-    featsHtml += '<div class="feature-row">' +
-      '<input class="f-icon" value="' + esc(f.icon || '') + '" onchange="updateFeature(' + i + ', \'icon\', this.value)">' +
-      '<input class="f-name" value="' + esc(f.name || '') + '" onchange="updateFeature(' + i + ', \'name\', this.value)">' +
-      '<input class="f-desc" value="' + esc(f.desc || '') + '" onchange="updateFeature(' + i + ', \'desc\', this.value)">' +
-    '</div>';
-  });
-  document.getElementById('featuresEdit').innerHTML = featsHtml;
-
-  // Audio player
-  if (props.audio) {
-    const player = document.getElementById('audioPlayer');
-    player.src = '/public/' + props.audio;
-    player.style.display = 'block';
-  }
-
-  // Render scene timeline
-  renderSceneTimeline();
-}
-
-function getSceneTexts() {
-  const narration = props.narration || '';
-  const timing = props.narrationTiming || {};
-  // New cue names: s2_project, s3_screenshot, s4_starzoom, s5_intro, s6_features, s7_outro
-  const keys = ['s2_project', 's3_screenshot', 's4_starzoom', 's5_intro', 's6_features', 's7_outro'];
-  const positions = keys.map(k => Math.floor((timing[k] || 0) * narration.length)).filter(p => p > 0);
-
-  let prev = 0;
-  const parts = [];
-  for (const pos of positions) {
-    parts.push(narration.slice(prev, pos).trim());
-    prev = pos;
-  }
-  parts.push(narration.slice(prev).trim());
-
-  // Strip leading/trailing punctuation from each part
-  const stripPunct = (s) => s.replace(/^[，。、；：！？,.;:!?\s]+|[，。、；：！？,.;:!?\s]+$/g, '').trim();
-
-  return {
-    s1: stripPunct(parts[0]) || '今天介绍的 GitHub 热门项目是',
-    s2: stripPunct(parts[1]) || '',
-    s3: stripPunct(parts[2]) || '',
-    s4: stripPunct(parts[3]) || '',
-    s5: stripPunct(parts[4]) || '',
-    s6: stripPunct(parts[5]) || '',
-    s7: stripPunct(parts[6]) || '关注我，获得最新的实用项目信息',
-  };
-}
-
-function renderSceneTimeline() {
-  const totalSec = props.durationSeconds || 30;
-  const T = totalSec * 30;
-  const timing = props.narrationTiming || {};
-  const texts = getSceneTexts();
-
-  const sceneColors = ['#6366f1','#8b5cf6','#f0c040','#ef4444','#3b82f6','#22c55e','#6366f1'];
-  const sceneNames = ['Opening','Project Card','Screenshot','Star Zoom','Intro README','Features','Outro'];
-  const scenes = [
-    { start:0, end:80, img:null, text:texts.s1 },
-    { start:70, end:150, img:null, text:props.name||'project' },
-    { start:135, end:280, img:props.screenshot, text:texts.s3 },
-    { start:260, end:360, img:props.screenshot, text:texts.s4 },
-    { start:300, end:Math.floor(T*0.88), img:props.screenshotIntro, text:texts.s5 },
-    { start:Math.floor(T*0.86), end:Math.floor(T*0.95), img:props.screenshotIntro, text:texts.s6 },
-    { start:Math.floor(T*0.93), end:T, img:null, text:texts.s7 },
-  ];
-
-  let html = '';
-  scenes.forEach((s, i) => {
-    const imgSrc = s.img ? '/public/' + s.img : '';
-    const secStart = (s.start / 30).toFixed(1);
-    const secEnd = (s.end / 30).toFixed(1);
-    const c = sceneColors[i];
-    html += '<div class="scene-row" style="border-left:3px solid ' + c + '">' +
-      '<div class="sc-row-hd">' +
-        '<span class="sc-row-num" style="background:' + c + '15;color:' + c + '">S' + (i+1) + '</span>' +
-        '<span class="sc-row-name">' + sceneNames[i] + '</span>' +
-        '<span class="sc-row-time">' + secStart + 's → ' + secEnd + 's</span>' +
-      '</div>' +
-      '<div class="sc-row-body">' +
-        (imgSrc ? '<img class="sc-row-thumb" src="' + imgSrc + '" onerror="this.style.display=\'none\'">' : '') +
-        '<textarea class="sc-row-text" id="sceneText_' + i + '" onchange="updateSceneText()" rows="2">' + esc(s.text) + '</textarea>' +
-      '</div>' +
-    '</div>';
-  });
-  document.getElementById('sceneTimeline').innerHTML = html;
-}
-
-function collectNarration() {
-  // Collect all scene texts into one narration string
-  const texts = [];
-  for (let i = 0; i < 7; i++) {
-    const el = document.getElementById('sceneText_' + i);
-    if (el && el.value.trim()) texts.push(el.value.trim());
-  }
-  return texts.join('');
-}
-
-function updateSceneText() {
-  props.narration = collectNarration();
-}
-
-function updateFeature(i, field, value) {
-  if (props.features && props.features[i]) {
-    props.features[i][field] = value;
-  }
-}
-
-// ── Editor: actions ──────────────────────────────────────────────
-async function takeScreenshot() {
-  const btn = document.getElementById('btnScreenshot');
-  btn.disabled = true; btn.textContent = 'Capturing...';
-  setStatus('Taking screenshots via CDP...', 'active');
-  try {
-    const r = await fetch('/api/screenshot', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        repo: props.repo,
-        heading: props.screenshotIntroHeading || '',
-        heading_index: props.screenshotIntroHeadingIndex || 0,
-        s6_heading: props.s6Heading || '',
-        s6_heading_index: props.s6HeadingIndex || 0
-      })
-    });
-    const data = await r.json();
-    if (data.success) {
-      props.screenshot = data.top.split('/').pop();
-      props.screenshotIntro = data.intro ? data.intro.split('/').pop() : null;
-      props.screenshotIntroHeight = data.intro_height || null;
-      props.s6ScreenshotHeight = data.s6_height || null;
-      document.getElementById('screenshotTop').src = data.top;
-      document.getElementById('screenshotTop').style.display = 'block';
-      if (data.intro) {
-        document.getElementById('screenshotIntro').src = data.intro;
-        document.getElementById('screenshotIntro').style.display = 'block';
-      }
-      document.getElementById('noScreenshot').style.display = 'none';
-      setStatus('Screenshots captured' + (data.star_pos ? ', star position found' : ''), 'active');
-    } else {
-      setStatus('Screenshot failed: ' + (data.error || 'unknown'), 'error');
-    }
-  } catch(e) { setStatus(e.message, 'error'); }
-  finally { btn.disabled = false; btn.textContent = 'Take Screenshots'; }
-}
-
-async function generateAudio() {
-  const btn = document.getElementById('btnGenerate');
-  btn.disabled = true; btn.textContent = 'Generating...';
-  setStatus('Generating voiceover via VoxCPM...', 'active');
-  try {
-    // Save current props (including edited narration and features)
-    props.narration = collectNarration();
-    await fetch('/api/save-props', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(props)
-    });
-
-    const r = await fetch('/api/generate-audio', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text: props.narration, repo: props.repo, scene_texts: props.sceneTexts || {}})
-    });
-    if (!r.ok) { const e = await r.json(); throw new Error(e.detail); }
-    const data = await r.json();
-    props.audio = data.path.split('/').pop();
-    props.durationSeconds = data.duration;
-    props.sceneDurations = data.sceneDurations || {};
-    const player = document.getElementById('audioPlayer');
-    player.src = data.path;
-    player.style.display = 'block';
-    player.play();
-    setStatus('Voiceover ready (' + data.duration.toFixed(1) + 's)', 'active');
-  } catch(e) { setStatus(e.message, 'error'); }
-  finally { btn.disabled = false; btn.textContent = 'Generate Voice'; }
-}
-
-async function previewRemotion() {
-  const modal = document.getElementById('modalOverlay');
-  const modalTitle = document.getElementById('modalTitle');
-  const modalSub = document.getElementById('modalSub');
-
-  modal.classList.add('show');
-  modalTitle.textContent = 'Generating Voice';
-  modalSub.textContent = 'Once finished, Remotion Studio will open automatically';
-  setStatus('Preparing preview...', 'active');
-
-  try {
-    props.narration = collectNarration();
-    await fetch('/api/save-props', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(props)
-    });
-
-    // Always regenerate audio for fresh preview
-    try {
-      const audioR = await fetch('/api/generate-audio', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({text: props.narration, repo: props.repo, scene_texts: props.sceneTexts || {}})
-      });
-      if (audioR.ok) {
-        const audioData = await audioR.json();
-        props.audio = audioData.path.split('/').pop();
-        props.durationSeconds = audioData.duration;
-        props.sceneDurations = audioData.sceneDurations || {};
-        document.getElementById('audioPlayer').src = audioData.path;
-        document.getElementById('audioPlayer').style.display = 'block';
-        setStatus('Voiceover ready (' + audioData.duration.toFixed(1) + 's)', 'active');
-      }
-    } catch(e) {
-      setStatus('Voice generation failed, continuing without audio: ' + e.message, 'error');
-    }
-
-    // Start/check Remotion Studio
-    modalTitle.textContent = 'Starting Remotion';
-    modalSub.textContent = 'Launching studio...';
-    setStatus('Checking Remotion Studio...', 'active');
-    const statusR = await fetch('/api/remotion/status');
-    const status = await statusR.json();
-    if (!status.running) {
-      const startR = await fetch('/api/remotion/start', {method: 'POST'});
-      const start = await startR.json();
-      if (!start.started) {
-        modal.classList.remove('show');
-        setStatus('Failed to start Remotion Studio', 'error');
-        return;
-      }
-      for (let i = 0; i < 15; i++) {
-        await new Promise(r => setTimeout(r, 1000));
-        const check = await fetch('/api/remotion/status');
-        const s = await check.json();
-        if (s.running) break;
-      }
-    }
-
-    // Small delay to ensure files are synced
-    await new Promise(r => setTimeout(r, 1500));
-    modal.classList.remove('show');
-    setStatus('Opening Remotion Studio...', 'active');
-    window.open('http://' + window.location.hostname + ':3000?t=' + Date.now(), '_blank');
-  } catch(e) {
-    modal.classList.remove('show');
-    setStatus('Remotion: ' + e.message, 'error');
-  }
-}
-
-async function buildVideo() {
-  const btn = document.getElementById('btnBuild');
-  btn.disabled = true; btn.textContent = 'Building...';
-  const modal = document.getElementById('modalOverlay');
-  const modalTitle = document.getElementById('modalTitle');
-  const modalSub = document.getElementById('modalSub');
-
-  modal.classList.add('show');
-  modalTitle.textContent = 'Building Video';
-  modalSub.textContent = 'Generating voiceover and rendering...';
-  setStatus('Preparing build...', 'active');
-
-  // Save edits
-  props.narration = collectNarration();
-  await fetch('/api/save-props', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(props)
-  });
-
-  // Always generate audio before building
-  try {
-    const audioR = await fetch('/api/generate-audio', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({text: props.narration, repo: props.repo, scene_texts: props.sceneTexts || {}})
-    });
-    if (audioR.ok) {
-      const audioData = await audioR.json();
-      props.audio = audioData.path ? audioData.path.split('/').pop() : props.audio;
-      props.durationSeconds = audioData.duration;
-      props.sceneDurations = audioData.sceneDurations;
-      setStatus('Voiceover ready (' + audioData.duration.toFixed(1) + 's)', 'active');
-    }
-  } catch(e) {
-    setStatus('Voice gen failed, building without audio: ' + e.message, 'error');
-  }
-
-  setStatus('Starting render...', 'active');
-  modalTitle.textContent = 'Rendering Video';
-  modalSub.textContent = 'This may take a few minutes...';
-  try {
-    const safeName = (props.repo || 'repo').replace(/[\\/]/g, '-');
-    const r = await fetch('/api/build-video', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({output_name: safeName + '-promo.mp4', props})
-    });
-    if (!r.ok) { const e = await r.json(); throw new Error(e.detail); }
-    pollRenderStatus();
-  } catch(e) { setStatus(e.message, 'error'); btn.disabled = false; btn.textContent = 'Build Video'; }
-}
-
-function pollRenderStatus() {
-  const interval = setInterval(async () => {
-    try {
-      const r = await fetch('/api/render-status');
-      const data = await r.json();
-      setStatus(data.progress, data.running ? 'active' : (data.output ? 'active' : 'error'));
-      if (!data.running) {
-        clearInterval(interval);
-        document.getElementById('modalOverlay').classList.remove('show');
-        document.getElementById('btnBuild').disabled = false;
-        document.getElementById('btnBuild').textContent = 'Build Video';
-      }
-    } catch(e) {}
-  }, 2000);
-}
-
-function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
-
-// Init — auto-load project from URL param, otherwise show hero
-(function() {
-  const params = new URLSearchParams(window.location.search);
-  const repo = params.get('repo');
-  if (repo) {
-    showEditor(repo);
-  }
-  // If no repo param, keep the default hero view — user must click "Refresh GitHub Trending"
-})();
-</script>
-</body>
-</html>"""
+# ── HTML template now in templates/index.html, loaded via get_html_template() ──
 
 # ── Pages ──────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
 def index():
-    return HTML_TEMPLATE
+    return _HTML_TEMPLATE
 
 
 @app.get("/editor", response_class=HTMLResponse)
 def editor_page():
-    return HTML_TEMPLATE
+    return _HTML_TEMPLATE
 
 
 # ── Main ───────────────────────────────────────────────────────────────────
+
+_HTML_TEMPLATE = ""
 
 def main():
     parser = argparse.ArgumentParser(description="Video Production Dashboard")
@@ -2146,9 +1317,8 @@ def main():
     args = parser.parse_args()
 
     server_ip = get_server_ip()
-    # Replace placeholder in HTML template with actual server IP
-    global HTML_TEMPLATE
-    HTML_TEMPLATE = HTML_TEMPLATE.replace("__SERVER_IP__", server_ip)
+    global _HTML_TEMPLATE
+    _HTML_TEMPLATE = get_html_template(server_ip)
 
     print(f"Dashboard: http://{server_ip}:{args.port}  (local: http://localhost:{args.port})")
 
