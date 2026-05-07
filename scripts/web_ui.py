@@ -25,10 +25,35 @@ import urllib.request
 SKILL_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def _get_github_token():
+    """Read GitHub token from env or common config files."""
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        return token
+    # Check gh CLI config
+    for cfg_path in [
+        os.path.expanduser("~/.config/gh/hosts.yml"),
+        os.path.expanduser("~/.config/gh/config.yml"),
+    ]:
+        try:
+            with open(cfg_path) as f:
+                for line in f:
+                    if "token:" in line or "oauth_token:" in line:
+                        val = line.split(":", 1)[1].strip()
+                        if val:
+                            return val
+        except Exception:
+            pass
+    return None
+
+
 def github_api_get(path, timeout=15):
     """Call GitHub API with SSL context and retry on transient errors."""
     url = f"https://api.github.com/{path}"
     headers = {"Accept": "application/vnd.github.v3+json", "User-Agent": "trending-video/1.0"}
+    token = _get_github_token()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
 
     ctx = ssl.create_default_context()
     for attempt in range(3):
@@ -258,6 +283,11 @@ def select_project(data: dict):
     # Fetch README for feature extraction & Chinese description
     readme_text = ""
     chinese_desc = ""
+    intro_heading = ""
+    intro_heading_index = 0
+    s6_content = ""
+    s6_heading = ""
+    s6_heading_index = 0
     features = [
         {"name": "/feature-1", "desc": "Core capability", "icon": "🚀"},
         {"name": "/feature-2", "desc": "Key functionality", "icon": "⚡"},
@@ -272,7 +302,21 @@ def select_project(data: dict):
         import base64
         readme_text = base64.b64decode(readme_info.get("content", "")).decode("utf-8", errors="replace")
         features = extract_features(readme_text)
-        chinese_desc = extract_chinese_description(readme_text, description, topics)
+
+        # S6 fallback: if features lack substance, extract "How It Works" instead
+        substantial = [f for f in features if len(f.get("desc", "")) > 15]
+        if len(substantial) < 3:
+            s6_data = extract_how_it_works(readme_text)
+            if s6_data.get("text"):
+                s6_content = s6_data["text"]
+                s6_heading = s6_data["heading"]
+                s6_heading_index = s6_data["heading_index"]
+                print(f"S6 using How-It-Works: heading={s6_heading}, index={s6_heading_index}")
+
+        desc_data = extract_chinese_description(readme_text, description, topics)
+        chinese_desc = desc_data.get("text", "") if isinstance(desc_data, dict) else desc_data
+        intro_heading = desc_data.get("heading", "") if isinstance(desc_data, dict) else ""
+        intro_heading_index = desc_data.get("heading_index", 0) if isinstance(desc_data, dict) else 0
     except Exception as e:
         print(f"README fetch error: {e}")
 
@@ -284,13 +328,14 @@ def select_project(data: dict):
 
     # Generate narration with timing cues
     weekly_stars = data.get("stars_weekly", "?")
-    narration, timing, scene_texts = generate_narration(name, weekly_stars, total_stars, language, chinese_desc or description, features)
+    weekly_stars_clean = weekly_stars if weekly_stars and weekly_stars not in ('?', '0') else ''
+    narration, timing, scene_texts = generate_narration(name, weekly_stars_clean, total_stars, language, chinese_desc or description, features, s6_content)
 
     props = {
         "repo": repo,
         "name": name,
         "totalStars": total_stars,
-        "weeklyStars": weekly_stars,
+        "weeklyStars": weekly_stars_clean,
         "language": language,
         "description": description,
         "chineseDesc": chinese_desc,
@@ -301,6 +346,12 @@ def select_project(data: dict):
         "narrationTiming": timing,
         "sceneTexts": scene_texts,
         "screenshot": "",
+        "screenshotIntroHeading": intro_heading,
+        "screenshotIntroHeadingIndex": intro_heading_index,
+        "s6Content": s6_content,
+        "s6Heading": s6_heading,
+        "s6HeadingIndex": s6_heading_index,
+        "s6Screenshot": "",
         "audio": "",
         "durationSeconds": max(15, len(narration) * 0.25),
         "sceneDurations": {},
@@ -373,20 +424,57 @@ def take_screenshot(data: dict):
 
     script = os.path.join(SKILL_DIR, "scripts", "screenshot_cdp.py")
 
+    # Get the target heading from props for a focused intro screenshot
+    target_heading = data.get("heading", "")
+    target_heading_index = data.get("heading_index", 0)
+    s6_heading = data.get("s6_heading", "")
+    s6_heading_index = data.get("s6_heading_index", 0)
+    if not target_heading:
+        props_file = os.path.join(REMOTION_DIR, "props.json")
+        if os.path.exists(props_file):
+            with open(props_file, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+            target_heading = existing.get("screenshotIntroHeading", "")
+            target_heading_index = existing.get("screenshotIntroHeadingIndex", 0)
+            s6_heading = existing.get("s6Heading", "")
+            s6_heading_index = existing.get("s6HeadingIndex", 0)
+
+    cmd = [sys.executable, script, url, base_name]
+    if target_heading:
+        cmd.extend(["--heading", target_heading])
+    if target_heading_index:
+        cmd.extend(["--heading-index", str(target_heading_index)])
+    if s6_heading:
+        cmd.extend(["--s6-heading", s6_heading])
+    if s6_heading_index:
+        cmd.extend(["--s6-heading-index", str(s6_heading_index)])
+
     try:
-        result = subprocess.run(
-            [sys.executable, script, url, base_name],
-            capture_output=True, text=True, timeout=60
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
         top_name = None
         intro_name = None
+        s6_name = None
+        intro_height = None
+        s6_height = None
         star_pos = None
         for line in result.stdout.split("\n") + result.stderr.split("\n"):
             if line.startswith("TOP:"):
                 top_name = line.split("TOP:", 1)[1].strip()
             elif line.startswith("INTRO:"):
                 intro_name = line.split("INTRO:", 1)[1].strip()
+            elif line.startswith("INTRO_H:"):
+                try:
+                    intro_height = int(line.split("INTRO_H:", 1)[1].strip())
+                except Exception:
+                    pass
+            elif line.startswith("S6_H:"):
+                try:
+                    s6_height = int(line.split("S6_H:", 1)[1].strip())
+                except Exception:
+                    pass
+            elif line.startswith("S6:"):
+                s6_name = line.split("S6:", 1)[1].strip()
             elif "STAR_POS:" in line:
                 try:
                     star_pos = json.loads(line.split("STAR_POS:", 1)[1].strip())
@@ -401,6 +489,12 @@ def take_screenshot(data: dict):
                 props["screenshot"] = top_name
                 if intro_name:
                     props["screenshotIntro"] = intro_name
+                if s6_name:
+                    props["s6Screenshot"] = s6_name
+                if intro_height:
+                    props["screenshotIntroHeight"] = intro_height
+                if s6_height:
+                    props["s6ScreenshotHeight"] = s6_height
                 with open(props_file, "w", encoding="utf-8") as f:
                     json.dump(props, f, ensure_ascii=False, indent=2)
 
@@ -408,6 +502,7 @@ def take_screenshot(data: dict):
                 "success": True,
                 "top": f"/public/{top_name}",
                 "intro": f"/public/{intro_name}" if intro_name else None,
+                "intro_height": intro_height,
                 "star_pos": star_pos,
             }
         return {"success": False, "error": result.stderr or result.stdout}
@@ -538,22 +633,41 @@ def generate_audio(data: dict):
             os.remove(combined_dst)
         os.rename(combined_src, combined_dst)
 
-    # Scene timing: fixed short scenes, proportional S5+S6
-    timing = data.get("timing", {})
-    fixed = {"s1": 2.5, "s2": 2.5, "s3": 2.5, "s4": 2.5, "s7": 2.5}
-    fixed_total = sum(fixed.values())
-    remaining = max(combined_dur - fixed_total, 10)
+    # Use exact per-scene audio durations — discard combined file, concatenate scenes instead.
+    # This guarantees each scene visual aligns perfectly with its audio.
+    for s in ['s1', 's2', 's3', 's4', 's5', 's6', 's7']:
+        if s not in durations:
+            durations[s] = 2.0
 
-    s5_frac = timing.get("s6_features", 0.5) - timing.get("s5_intro", 0.1)
-    s6_frac = 1.0 - timing.get("s6_features", 0.5)
-    total_frac = max(s5_frac + s6_frac, 0.01)
+    total_dur = sum(durations[s] for s in ['s1', 's2', 's3', 's4', 's5', 's6', 's7'])
+    # Concatenate per-scene WAVs using Python's wave module (ffmpeg concat produces broken headers)
+    import wave as _wave
+    combined_path = os.path.join(PUBLIC_DIR, combined_name)
+    scene_order = ['s1', 's2', 's3', 's4', 's5', 's6', 's7']
+    wav_readers = []
+    total_frames = 0
+    params = None
+    for s in scene_order:
+        wav_path = os.path.join(PUBLIC_DIR, f"narration_{safe_name}_{s}.wav")
+        if os.path.exists(wav_path):
+            wf = _wave.open(wav_path, 'rb')
+            wav_readers.append(wf)
+            total_frames += wf.getnframes()
+            if params is None:
+                params = wf.getparams()
+    if wav_readers and params:
+        with _wave.open(combined_path, 'wb') as out:
+            out.setparams(params)
+            out.setnframes(total_frames)
+            for wf in wav_readers:
+                wf.rewind()
+                out.writeframes(wf.readframes(wf.getnframes()))
+                wf.close()
+        print(f"Concatenated {len(wav_readers)} scene WAVs → {combined_path} ({total_frames} frames, {total_dur:.1f}s)")
+    else:
+        print("WARNING: no scene WAVs found, keeping TTS combined file")
 
-    durations = dict(fixed)
-    durations["s5"] = round(remaining * s5_frac / total_frac, 2)
-    durations["s6"] = round(remaining * s6_frac / total_frac, 2)
-
-    total_dur = sum(durations.values())
-    print(f"Combined: {combined_dur:.1f}s, scaled total: {total_dur:.1f}s, durations: {durations}")
+    print(f"Scene durations: {durations}, total: {total_dur:.1f}s")
 
     # Update props with scaled exact scene durations
     props_file = os.path.join(REMOTION_DIR, "props.json")
@@ -685,47 +799,103 @@ def _is_skip_heading(heading):
 
 
 def extract_chinese_description(readme_text, fallback_desc, topics):
-    """Extract project purpose and structure for Chinese narration."""
+    """Extract project core value proposition for Chinese narration.
+
+    Returns: {"text": str, "heading": str}
+      - text: Chinese description of what the project offers
+      - heading: English heading text that was matched (for DOM targeting in screenshot)
+    """
     lines = readme_text.split("\n")
     import re as _re
 
     tagline = ""
     what_is_text = ""
+    matched_heading = ""  # English heading that provided the best content
     categories = []  # {name, count}
 
-    # ── Pass 1: extract tagline and "what is / about" section ──
-    in_what_is = False
-    what_lines = []
+    # ── Pass 1: find core value sections — priority: what you get > why > about > highlights ──
+    value_patterns = [
+        (r"(What\s+you\s+(get|can\s+do|will\s+get|gain|learn)|Benefits?|Use\s+Cases?|能获得什么|你可以|你能做什么)", "gain"),
+        (r"(Why|Motivation|背景|动机|解决的问题)", "why"),
+        (r"(What\s+(is|are)|About|Overview|介绍|简介|概述|Background)", "about"),
+        (r"(Highlight|亮点|特色|Core\s+Features?|核心功能|主要特性)", "highlight"),
+    ]
+
+    in_value_section = False
+    value_lines = []
+    section_heading = ""
+    heading_index = 0  # 1-based index of matched h2 in the README
+    h2_count = 0
+
     for line in lines:
         stripped = line.strip()
 
-        # Blockquote tagline (marketing blurbs like "Want skills that...") — skip these
+        # Blockquote tagline
         if stripped.startswith("> ") and not tagline:
             t = _clean_md(stripped[2:])
-            # Only keep if it reads like a factual description, not a marketing pitch
             if not any(w in t.lower() for w in ["want ", "get started", "try it", "see how", "check out", "click here", "sign up"]):
                 if len(t) > 15:
                     tagline = t
 
         m = _re.match(r"^##\s+", stripped)
         if m:
+            h2_count += 1
             heading = stripped[2:].strip()
             h_clean = _re.sub(r"[*_`#]", "", heading).strip()
-            if _re.match(r"(What\s+(is|are)|About|Overview|介绍|简介|概述|Background)", h_clean, _re.IGNORECASE):
-                in_what_is = True
+
+            # Check if this heading matches any value pattern
+            for pattern, _ in value_patterns:
+                if _re.match(pattern, h_clean, _re.IGNORECASE):
+                    in_value_section = True
+                    section_heading = heading
+                    heading_index = h2_count
+                    value_lines = []
+                    break
+            else:
+                if in_value_section:
+                    in_value_section = False
+
+        if in_value_section and stripped and not stripped.startswith("#") and not stripped.startswith("<!--"):
+            value_lines.append(stripped)
+            if len(" ".join(value_lines)) > 800:
+                in_value_section = False
+
+        if value_lines and not in_value_section and not what_is_text:
+            what_is_text = _clean_md(" ".join(value_lines))
+            matched_heading = section_heading
+
+    # Handle case where value section extends to end of README
+    if value_lines and not what_is_text:
+        what_is_text = _clean_md(" ".join(value_lines))
+        matched_heading = section_heading
+
+    # ── Pass 2: if no value section found, try first substantial paragraphs ──
+    if not what_is_text:
+        para_lines = []
+        in_first_section = False
+        for line in lines:
+            stripped = line.strip()
+            m = _re.match(r"^##\s+", stripped)
+            if m:
+                h_clean = _re.sub(r"[*_`#]", "", stripped[2:].strip()).strip()
+                if _is_skip_heading(h_clean):
+                    if in_first_section:
+                        break
+                    continue
+                if in_first_section:
+                    break
+                in_first_section = True
+                section_heading = stripped[2:].strip()
                 continue
-            elif in_what_is:
-                in_what_is = False
+            if in_first_section and stripped and not stripped.startswith("#") and not stripped.startswith("<!--") and not stripped.startswith(">"):
+                para_lines.append(stripped)
+                if len(" ".join(para_lines)) > 600:
+                    break
+        if para_lines:
+            what_is_text = _clean_md(" ".join(para_lines))
+            matched_heading = section_heading
 
-        if in_what_is and stripped and not stripped.startswith("#") and not stripped.startswith("<!--"):
-            what_lines.append(stripped)
-            if len(" ".join(what_lines)) > 800:
-                in_what_is = False
-
-    if what_lines:
-        what_is_text = _clean_md(" ".join(what_lines))
-
-    # ── Pass 2: find categories and their items ──
+    # ── Pass 3: find categories and their items ──
     in_skills_section = False
     current_cat = None
 
@@ -765,10 +935,9 @@ def extract_chinese_description(readme_text, fallback_desc, topics):
             if not stripped.startswith("- ["):
                 current_cat["count"] += 1
 
-    # ── Build description: summarize what the project does ──
+    # ── Build description: summarize what the project offers ──
     parts = []
 
-    # Translate the "What is / About" explanation to Chinese (core purpose)
     if what_is_text:
         what_short = what_is_text
         if len(what_is_text) > 500:
@@ -784,16 +953,15 @@ def extract_chinese_description(readme_text, fallback_desc, topics):
         cat_str = "、".join(cat_names[:6])
         parts.append(f"共收录{total_items}个资源，涵盖{cat_str}等分类")
 
+    result_text = ""
     if parts:
-        return "。".join(parts)
+        result_text = "。".join(parts)
+    elif topics:
+        result_text = f"该项目涵盖{'、'.join(topics[:5])}等领域"
+    elif fallback_desc and len(fallback_desc) < 80:
+        result_text = f"项目简介：{fallback_desc}"
 
-    if topics:
-        return f"该项目涵盖{'、'.join(topics[:5])}等领域"
-
-    if fallback_desc and len(fallback_desc) < 80:
-        return f"项目简介：{fallback_desc}"
-
-    return ""
+    return {"text": result_text, "heading": matched_heading, "heading_index": heading_index}
 
 
 def extract_features(readme_text):
@@ -924,7 +1092,69 @@ def extract_features(readme_text):
     return features[:6]
 
 
-def generate_narration(name, weekly_stars, total_stars, language, description, features):
+def extract_how_it_works(readme_text):
+    """Extract 'How It Works' / workflow section for S6 fallback.
+
+    Returns: {"text": str, "heading": str, "heading_index": int}
+    Searches for: How It Works, Architecture, Workflow, 工作原理, 怎么用 etc.
+    """
+    lines = readme_text.split("\n")
+    import re as _re
+
+    patterns = [
+        r"(How\s+(it|does\s+it|this)\s+(works?|work)|How\s+to\s+use)",
+        r"(Architecture|System\s+Design|Design\s+Overview)",
+        r"(Workflow|Pipeline|Process|Flow)",
+        r"(工作原理|工作流程|怎么用|如何使用|使用方法|实现原理)",
+        r"(Getting\s+Started|Quick\s+Start|Quickstart)",
+    ]
+
+    h2_count = 0
+    in_target = False
+    target_lines = []
+    target_heading = ""
+    target_heading_index = 0
+
+    for line in lines:
+        stripped = line.strip()
+        m = _re.match(r"^##\s+", stripped)
+        if m:
+            h2_count += 1
+            heading = stripped[2:].strip()
+            h_clean = _re.sub(r"[*_`#]", "", heading).strip()
+            if in_target:
+                in_target = False
+            for pat in patterns:
+                if _re.match(pat, h_clean, _re.IGNORECASE):
+                    in_target = True
+                    target_heading = heading
+                    target_heading_index = h2_count
+                    target_lines = []
+                    break
+
+        if in_target and stripped and not stripped.startswith("#") and not stripped.startswith("<!--"):
+            target_lines.append(stripped)
+            if len(" ".join(target_lines)) > 800:
+                in_target = False
+
+    if not target_lines:
+        return {"text": "", "heading": "", "heading_index": 0}
+
+    raw_text = _clean_md(" ".join(target_lines))
+    # Translate to Chinese for narration
+    if len(raw_text) > 500:
+        cut = raw_text.rfind(". ", 250, 500)
+        raw_text = raw_text[:cut + 1] if cut > 100 else raw_text[:500]
+    chinese = translate_to_chinese(raw_text)
+
+    return {
+        "text": chinese or raw_text,
+        "heading": target_heading,
+        "heading_index": target_heading_index,
+    }
+
+
+def generate_narration(name, weekly_stars, total_stars, language, description, features, s6_text=""):
     # Build narration with per-scene timing cues
     parts = []
     cues = {}
@@ -936,17 +1166,29 @@ def generate_narration(name, weekly_stars, total_stars, language, description, f
 
     # S2: Project name (visual only, name spoken as part of flow)
     p2 = f" {name}。"
-    parts.append(p2)
-    cues["s3_screenshot"] = len("".join(parts))  # S2→S3
 
-    # S3: Weekly stars
-    p3 = f"本周获得{weekly_stars}颗星。"
-    parts.append(p3)
-    cues["s4_starzoom"] = len("".join(parts))  # S3→S4
-
-    # S4: Total stars (continuation with comma)
-    p4 = f"，总计{total_stars}颗星。"
-    parts.append(p4)
+    has_weekly = weekly_stars and weekly_stars not in ('?', '0')
+    if has_weekly:
+        parts.append(p2)
+        cues["s3_screenshot"] = len("".join(parts))
+        # S3: Weekly stars
+        p3 = f"本周获得{weekly_stars}颗星。"
+        parts.append(p3)
+        cues["s4_starzoom"] = len("".join(parts))
+        # S4: Total stars
+        p4 = f"，总计{total_stars}颗星。"
+        parts.append(p4)
+    else:
+        # No weekly data — S3 uses total stars, S4 is visual-only (star zoom)
+        parts.append(p2)
+        cues["s3_screenshot"] = len("".join(parts))
+        # S3: Total stars
+        p3 = f"总计{total_stars}颗星。"
+        parts.append(p3)
+        cues["s4_starzoom"] = len("".join(parts))
+        # S4: brief filler so star zoom scene has audio
+        p4 = f"这个项目非常受欢迎。"
+        parts.append(p4)
     cues["s5_intro"] = len("".join(parts))  # S4→S5
 
     # S5: Description — translate to Chinese if needed
@@ -960,8 +1202,10 @@ def generate_narration(name, weekly_stars, total_stars, language, description, f
         parts.append(desc_clean + "。")
     cues["s6_features"] = len("".join(parts))  # S5→S6
 
-    # S6: Features — translate descriptions to Chinese for voice
-    if features:
+    # S6: Features — or "How It Works" fallback
+    if s6_text:
+        parts.append(s6_text.rstrip("。；") + "。")
+    elif features:
         feat_parts = ["核心功能包括："]
         for i, f in enumerate(features[:5]):
             fname = f["name"].strip("/")
@@ -1128,6 +1372,36 @@ header .actions { margin-left: auto; display: flex; gap: 8px; }
 }
 .repo-card .r-action { position: relative; z-index: 1; }
 
+/* ── Hero Refresh (landing state) ────── */
+.hero-refresh {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  min-height: 60vh; text-align: center; gap: 16px;
+  animation: fadeUp 0.6s ease both;
+}
+.hero-refresh .hero-icon { font-size: 56px; margin-bottom: 8px; }
+.hero-refresh h2 { font-family: 'DM Serif Display', serif; font-size: 36px; font-weight: 400; letter-spacing: -0.02em; }
+.hero-refresh p { color: var(--text-secondary); font-size: 15px; max-width: 360px; line-height: 1.6; }
+.btn-lg { padding: 14px 36px; font-size: 15px; border-radius: var(--radius); font-weight: 600; }
+
+/* ── URL Input ─────────────────────────── */
+.url-input-row {
+  display: flex; gap: 10px; align-items: center;
+  margin-top: 8px; width: 100%; max-width: 520px;
+}
+.url-input-row .url-sep {
+  font-size: 12px; color: var(--text-muted); white-space: nowrap;
+  font-weight: 500; letter-spacing: 0.02em;
+}
+.url-input-field {
+  flex: 1; padding: 12px 16px; border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light); background: var(--surface);
+  font-size: 13px; font-family: 'JetBrains Mono', monospace;
+  color: var(--text); transition: border-color 0.2s;
+}
+.url-input-field:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px rgba(79,70,229,0.1); }
+.url-input-field::placeholder { color: var(--text-muted); font-family: 'DM Sans', sans-serif; font-size: 12px; }
+.url-input-row .btn-url { white-space: nowrap; }
+
 /* ── Editor View ─────────────────────── */
 #editorView { display: none; padding: 32px; max-width: 1440px; margin: 0 auto; position: relative; z-index: 1; }
 .back-row { margin-bottom: 20px; }
@@ -1222,12 +1496,25 @@ audio { width: 100%; margin-top: 14px; border-radius: var(--radius-sm); }
 
 <!-- ─── LIST VIEW ──────────────────────────────────────────────── -->
 <div id="listView">
-  <div class="list-header">
+  <div class="list-header" style="display:none">
     <h2>Trending Projects</h2>
     <p class="subtitle">Select a repository to produce a promotional video</p>
   </div>
   <div id="listContent">
-    <div class="empty-state"><div class="empty-icon">📡</div><h3>No data yet</h3><p>Click Refresh to fetch GitHub Trending</p></div>
+    <div class="hero-refresh">
+      <div class="hero-icon">🔥</div>
+      <h2>GitHub Trending</h2>
+      <p>Fetch the latest trending repositories, then choose one to produce a promotional video</p>
+      <div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">
+        <button class="btn btn-gold btn-lg" id="btnHeroRefresh" onclick="refreshTrending()">Refresh GitHub Trending</button>
+        <button class="btn btn-primary btn-lg" id="btnHeroShowCached" onclick="showCachedTrending()">Already Fetched · Show Skills</button>
+      </div>
+      <div class="url-input-row">
+        <span class="url-sep">or paste a GitHub URL</span>
+        <input class="url-input-field" id="urlInput" type="text" placeholder="https://github.com/owner/repo" onkeydown="if(event.key==='Enter')generateFromUrl()">
+        <button class="btn btn-gold btn-url" id="btnUrlGenerate" onclick="generateFromUrl()">Generate Video</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1245,8 +1532,12 @@ audio { width: 100%; margin-top: 14px; border-radius: var(--radius-sm); }
         <img class="screenshot-img" id="screenshotTop" src="" alt="Top" onerror="this.style.display='none'">
       </div>
       <div class="shot-wrap">
-        <div class="shot-label"><span class="dot-indicator intro"></span> Intro · README</div>
+        <div class="shot-label"><span class="dot-indicator intro"></span> Intro · README (S5)</div>
         <img class="screenshot-img" id="screenshotIntro" src="" alt="Intro" onerror="this.style.display='none'">
+      </div>
+      <div class="shot-wrap" id="s6ShotWrap" style="display:none">
+        <div class="shot-label"><span class="dot-indicator intro" style="background:var(--green)"></span> How It Works (S6)</div>
+        <img class="screenshot-img" id="screenshotS6" src="" alt="S6" onerror="this.style.display='none'">
       </div>
       <div id="noScreenshot" style="color:var(--text-muted);padding:30px;text-align:center;font-size:13px">No screenshots yet</div>
       <div style="margin-top:16px">
@@ -1308,6 +1599,7 @@ function showList() {
   const url = new URL(window.location);
   url.searchParams.delete('repo');
   window.history.pushState({}, '', url);
+  // Only show grid if we already have cached data, otherwise keep hero
   loadTrending();
 }
 
@@ -1323,14 +1615,62 @@ function showEditor(repo) {
 }
 
 // ── List: load trending ─────────────────────────────────────────
+function showHeroRefresh() {
+  document.querySelector('#listView .list-header').style.display = 'none';
+  document.getElementById('listContent').innerHTML =
+    '<div class="hero-refresh">' +
+      '<div class="hero-icon">🔥</div>' +
+      '<h2>GitHub Trending</h2>' +
+      '<p>Fetch the latest trending repositories, then choose one to produce a promotional video</p>' +
+      '<div style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center">' +
+        '<button class="btn btn-gold btn-lg" id="btnHeroRefresh" onclick="refreshTrending()">Refresh GitHub Trending</button>' +
+        '<button class="btn btn-primary btn-lg" id="btnHeroShowCached" onclick="showCachedTrending()">Already Fetched · Show Skills</button>' +
+      '</div>' +
+      '<div class="url-input-row">' +
+        '<span class="url-sep">or paste a GitHub URL</span>' +
+        '<input class="url-input-field" id="urlInput" type="text" placeholder="https://github.com/owner/repo" onkeydown="if(event.key===\'Enter\')generateFromUrl()">' +
+        '<button class="btn btn-gold btn-url" id="btnUrlGenerate" onclick="generateFromUrl()">Generate Video</button>' +
+      '</div>' +
+    '</div>';
+}
+
+function showCachedTrending() {
+  loadTrending();
+}
+
+function generateFromUrl() {
+  const input = document.getElementById('urlInput');
+  const raw = (input.value || '').trim();
+  if (!raw) {
+    setStatus('Please paste a GitHub URL first', 'error');
+    return;
+  }
+  // Parse owner/repo from GitHub URL. Supported formats:
+  //   https://github.com/owner/repo[/...]
+  //   github.com/owner/repo[/...]
+  //   owner/repo
+  let match = raw.match(/github\.com\/([^\/]+\/[^\/]+)/i);
+  if (match) {
+    showEditor(match[1]);
+    return;
+  }
+  match = raw.match(/^([^\/\s]+\/[^\/\s]+)$/);
+  if (match) {
+    showEditor(match[1]);
+    return;
+  }
+  setStatus('Invalid GitHub URL — use format: https://github.com/owner/repo', 'error');
+}
+
 async function loadTrending() {
   try {
     const r = await fetch('/api/trending');
     const repos = await r.json();
     if (!repos.length) {
-      document.getElementById('listContent').innerHTML = '<div class="empty"><h3>No data</h3><p>Click "Refresh Trending" to fetch data</p></div>';
+      showHeroRefresh();
       return;
     }
+    document.querySelector('#listView .list-header').style.display = '';
     let html = '<div class="grid">';
     repos.forEach((repo, idx) => {
       const stars = repo.stars_weekly !== '?' ? repo.stars_weekly : '';
@@ -1356,9 +1696,15 @@ async function loadTrending() {
   }
 }
 
+function disableRefreshButtons(disabled, text) {
+  ['btnRefresh', 'btnHeroRefresh'].forEach(id => {
+    const btn = document.getElementById(id);
+    if (btn) { btn.disabled = disabled; btn.textContent = text; }
+  });
+}
+
 async function refreshTrending() {
-  const btn = document.getElementById('btnRefresh');
-  btn.disabled = true; btn.textContent = 'Fetching...';
+  disableRefreshButtons(true, 'Fetching...');
   setStatus('Fetching GitHub Trending...', 'active');
   try {
     await fetch('/api/trending/fetch');
@@ -1368,15 +1714,15 @@ async function refreshTrending() {
       const repos = await r.json();
       if (repos.length > 0) {
         clearInterval(interval);
-        btn.disabled = false; btn.textContent = 'Refresh Trending';
+        disableRefreshButtons(false, '↻ Refresh');
         setStatus('Fetched ' + repos.length + ' projects', 'active');
         loadTrending();
       }
     }, 2000);
-    setTimeout(() => { clearInterval(interval); btn.disabled = false; btn.textContent = 'Refresh Trending'; }, 30000);
+    setTimeout(() => { clearInterval(interval); disableRefreshButtons(false, '↻ Refresh'); }, 30000);
   } catch(e) {
     setStatus('Fetch failed: ' + e.message, 'error');
-    btn.disabled = false; btn.textContent = 'Refresh Trending';
+    disableRefreshButtons(false, '↻ Refresh');
   }
 }
 
@@ -1428,10 +1774,18 @@ function renderEditor() {
   } else {
     document.getElementById('screenshotIntro').style.display = 'none';
   }
+  if (props.s6Screenshot) {
+    document.getElementById('screenshotS6').src = '/public/' + props.s6Screenshot;
+    document.getElementById('screenshotS6').style.display = 'block';
+    document.getElementById('s6ShotWrap').style.display = '';
+  } else {
+    document.getElementById('screenshotS6').style.display = 'none';
+    document.getElementById('s6ShotWrap').style.display = 'none';
+  }
 
   let meta = '';
   if (props.totalStars) meta += '<div class="meta-cell"><div class="m-label">Total Stars</div><div class="m-value gold">⭐ ' + esc(props.totalStars) + '</div></div>';
-  if (props.weeklyStars) meta += '<div class="meta-cell"><div class="m-label">This Week</div><div class="m-value">🔥 +' + esc(props.weeklyStars) + '</div></div>';
+  if (props.weeklyStars && props.weeklyStars !== '?') meta += '<div class="meta-cell"><div class="m-label">This Week</div><div class="m-value">🔥 +' + esc(props.weeklyStars) + '</div></div>';
   if (props.language) meta += '<div class="meta-cell"><div class="m-label">Language</div><div class="m-value">' + esc(props.language) + '</div></div>';
   if (props.author) meta += '<div class="meta-cell"><div class="m-label">Author</div><div class="m-value" style="font-size:14px">' + esc(props.author) + '</div></div>';
   if (props.chineseDesc) meta += '<div class="meta-cell" style="grid-column:1/-1"><div class="m-label">Introduction</div><div class="m-value" style="font-size:12px;font-weight:400;font-family:\'DM Sans\',sans-serif">' + esc(props.chineseDesc) + '</div></div>';
@@ -1556,12 +1910,20 @@ async function takeScreenshot() {
     const r = await fetch('/api/screenshot', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({repo: props.repo})
+      body: JSON.stringify({
+        repo: props.repo,
+        heading: props.screenshotIntroHeading || '',
+        heading_index: props.screenshotIntroHeadingIndex || 0,
+        s6_heading: props.s6Heading || '',
+        s6_heading_index: props.s6HeadingIndex || 0
+      })
     });
     const data = await r.json();
     if (data.success) {
       props.screenshot = data.top.split('/').pop();
       props.screenshotIntro = data.intro ? data.intro.split('/').pop() : null;
+      props.screenshotIntroHeight = data.intro_height || null;
+      props.s6ScreenshotHeight = data.s6_height || null;
       document.getElementById('screenshotTop').src = data.top;
       document.getElementById('screenshotTop').style.display = 'block';
       if (data.intro) {
@@ -1598,6 +1960,8 @@ async function generateAudio() {
     if (!r.ok) { const e = await r.json(); throw new Error(e.detail); }
     const data = await r.json();
     props.audio = data.path.split('/').pop();
+    props.durationSeconds = data.duration;
+    props.sceneDurations = data.sceneDurations || {};
     const player = document.getElementById('audioPlayer');
     player.src = data.path;
     player.style.display = 'block';
@@ -1635,6 +1999,8 @@ async function previewRemotion() {
       if (audioR.ok) {
         const audioData = await audioR.json();
         props.audio = audioData.path.split('/').pop();
+        props.durationSeconds = audioData.duration;
+        props.sceneDurations = audioData.sceneDurations || {};
         document.getElementById('audioPlayer').src = audioData.path;
         document.getElementById('audioPlayer').style.display = 'block';
         setStatus('Voiceover ready (' + audioData.duration.toFixed(1) + 's)', 'active');
@@ -1747,15 +2113,14 @@ function pollRenderStatus() {
 
 function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;'); }
 
-// Init — auto-load project from URL param
+// Init — auto-load project from URL param, otherwise show hero
 (function() {
   const params = new URLSearchParams(window.location.search);
   const repo = params.get('repo');
   if (repo) {
     showEditor(repo);
-  } else {
-    loadTrending();
   }
+  // If no repo param, keep the default hero view — user must click "Refresh GitHub Trending"
 })();
 </script>
 </body>

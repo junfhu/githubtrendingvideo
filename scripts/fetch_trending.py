@@ -1,72 +1,56 @@
-"""Fetch GitHub Trending weekly page and output top 10 repos as structured data."""
-import sys, re, json, urllib.request
+import sys
+import re
 
-sys.stdout.reconfigure(encoding='utf-8')
+html_path = sys.argv[1] if len(sys.argv) > 1 else "trending.html"
 
-TRENDING_URL = "https://github.com/trending?since=weekly"
-HTML_FILE = "D:/BaiduSyncdisk/Obsidian/ForCC/.claude/skills/github-trending/trending.html"
+with open(html_path, "r", encoding="utf-8") as f:
+    html = f.read()
 
-def fetch():
-    """Download trending page HTML."""
-    req = urllib.request.Request(TRENDING_URL, headers={"User-Agent": "Mozilla/5.0"})
-    html = urllib.request.urlopen(req).read().decode('utf-8', errors='replace')
-    with open(HTML_FILE, 'w', encoding='utf-8') as f:
-        f.write(html)
-    return html
+repos = []
 
-def parse(html):
-    """Parse trending HTML and return list of repo dicts."""
-    articles = html.split('<article')
-    repos = []
-    for art in articles[1:]:
-        h2_block = re.search(r'<h2[^>]*>(.*?)</h2>', art, re.DOTALL)
-        repo = None
-        if h2_block:
-            h2_href = re.search(r'href="/([^"]+)"', h2_block.group(1))
-            if h2_href:
-                path = h2_href.group(1)
-                parts = path.split('/')
-                if len(parts) == 2 and 'login' not in path and 'sponsors' not in path:
-                    repo = path
+articles = re.split(r'<article class="Box-row"', html)[1:]
 
-        desc_m = re.search(r'<p[^>]*class="[^"]*col-9[^"]*"[^>]*>(.*?)</p>', art, re.DOTALL)
-        lang_m = re.search(r'itemprop="programmingLanguage"[^>]*>([^<]+)<', art)
-        stars_week = re.search(r'([\d,]+)\s+stars?\s+this\s+week', art)
-        total_stars = re.search(r'stargazers[^>]*>.*?([\d,]+)\s*</a>', art, re.DOTALL)
+for article in articles:
+    # Repo name from h2
+    h2_match = re.search(r'<h2 class="h3 lh-condensed">(.*?)</h2>', article, re.DOTALL)
+    if not h2_match:
+        continue
+    h2_content = h2_match.group(1)
+    link_match = re.search(r'href="/([^"]+)"', h2_content)
+    if not link_match:
+        continue
+    full_name = link_match.group(1)
 
-        if repo:
-            repos.append({
-                'repo': repo,
-                'url': f'https://github.com/{repo}',
-                'weeklyStars': stars_week.group(1) if stars_week else '?',
-                'totalStars': total_stars.group(1) if total_stars else '?',
-                'language': lang_m.group(1).strip() if lang_m else 'Unknown',
-                'description': re.sub(r'<[^>]+>', '', desc_m.group(1)).strip()[:120] if desc_m else '',
-            })
-            if len(repos) >= 10:
-                break
-    return repos
+    # Description
+    desc_match = re.search(r'<p class="col-9[^"]*"[^>]*>\s*(.*?)\s*</p>', article, re.DOTALL)
+    description = ""
+    if desc_match:
+        desc_text = re.sub(r'<[^>]+>', '', desc_match.group(1)).strip()
+        description = desc_text.replace('|', '/')
 
-def main():
-    print("Fetching GitHub Trending (weekly)...", file=sys.stderr)
-    try:
-        html = fetch()
-    except Exception as e:
-        print(f"Fetch failed: {e}, using cached HTML...", file=sys.stderr)
-        with open(HTML_FILE, 'r', encoding='utf-8') as f:
-            html = f.read()
+    # Language
+    lang_match = re.search(r'itemprop="programmingLanguage"[^>]*>\s*([^<\s]+)', article)
+    language = lang_match.group(1) if lang_match else "Unknown"
 
-    repos = parse(html)
-    if not repos:
-        print("No repos found!", file=sys.stderr)
-        sys.exit(1)
+    # Stars total - from stargazers link
+    stars_total = "0"
+    stars_match = re.search(r'href="/[^"]+/stargazers"[^>]*>.*?octicon-star.*?</svg>\s*([\d,]+)', article, re.DOTALL)
+    if stars_match:
+        stars_total = stars_match.group(1).replace(",", "")
 
-    # Output JSON for machine consumption, text for human
-    if '--json' in sys.argv:
-        print(json.dumps(repos, ensure_ascii=False, indent=2))
-    else:
-        for i, r in enumerate(repos):
-            print(f"{i+1}|{r['repo']}|{r['weeklyStars']}|{r['totalStars']}|{r['language']}|{r['description']}")
+    # Stars weekly - from float-sm-right span
+    stars_weekly = "?"
+    weekly_match = re.search(r'float-sm-right[^>]*>.*?octicon-star.*?</svg>\s*([\d,]+)\s*stars?\s*(this|last)\s', article, re.DOTALL)
+    if weekly_match:
+        stars_weekly = weekly_match.group(1).replace(",", "")
 
-if __name__ == '__main__':
-    main()
+    repos.append({
+        "full_name": full_name,
+        "stars_weekly": stars_weekly,
+        "stars_total": stars_total,
+        "language": language,
+        "description": description[:150]
+    })
+
+for i, r in enumerate(repos, 1):
+    print(f"{i}|{r['full_name']}|{r['stars_weekly']}|{r['stars_total']}|{r['language']}|{r['description']}")

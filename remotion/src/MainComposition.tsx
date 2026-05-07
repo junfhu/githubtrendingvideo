@@ -54,6 +54,10 @@ interface VideoProps {
   features: Feature[];
   screenshot: string;
   screenshotIntro?: string;
+  screenshotIntroHeight?: number;
+  s6Screenshot?: string;
+  s6ScreenshotHeight?: number;
+  s6Content?: string;
   starScreenshot?: string;
   audio: string;
   narrationTiming?: Record<string, number>;
@@ -154,6 +158,7 @@ export const MainComposition = () => {
   const displayName = props.name || repo.split('/').pop() || repo;
   const totalStars = props.totalStars || '0';
   const weeklyStars = props.weeklyStars || '0';
+  const hasWeeklyStars = props.weeklyStars && props.weeklyStars !== '?' && props.weeklyStars !== '0';
   const language = props.language || 'Unknown';
   const description = props.description || '';
   const author = props.author || 'Unknown';
@@ -161,6 +166,12 @@ export const MainComposition = () => {
   const features = props.features || DEFAULT_FEATURES;
   const screenshotSrc = props.screenshot ? staticFile(props.screenshot) : '';
   const screenshotIntroSrc = props.screenshotIntro ? staticFile(props.screenshotIntro) : '';
+  const introHeight = props.screenshotIntroHeight || 0;
+  const introFitsScreen = introHeight > 0 && introHeight <= 1080;
+  const s6ScreenshotSrc = props.s6Screenshot ? staticFile(props.s6Screenshot) : '';
+  const s6Height = props.s6ScreenshotHeight || 0;
+  const s6FitsScreen = s6Height > 0 && s6Height <= 1080;
+  const s6Content = props.s6Content || '';
   const audioSrc = props.audio ? staticFile(props.audio) : '';
 
   // Build scenes from exact audio durations (7 concatenated files → one combined audio)
@@ -321,6 +332,7 @@ export const MainComposition = () => {
                   {Number(totalStars.replace(/,/g, '')).toLocaleString()}
                 </div>
               </div>
+              {hasWeeklyStars && (
               <div style={{
                 flex: 1, background: '#ffffff', borderRadius: 14, padding: '24px 28px',
                 boxShadow: '0 4px 16px rgba(0,0,0,0.06)',
@@ -332,6 +344,7 @@ export const MainComposition = () => {
                   +{weeklyStars}
                 </div>
               </div>
+              )}
             </div>
           </div>
         </AbsoluteFill>
@@ -353,6 +366,7 @@ export const MainComposition = () => {
                   <div style={{ color: '#f0c040', fontSize: 16, fontWeight: 700, letterSpacing: 3, marginBottom: 6 }}>⭐ Total Stars</div>
                   <div style={{ color: '#ffffff', fontSize: 56, fontWeight: 900, lineHeight: 1 }}>{Number(totalStars.replace(/,/g, '')).toLocaleString()}</div>
                 </div>
+                {hasWeeklyStars && (
                 <div style={{
                   position: 'absolute', left: '6%', top: '72%',
                   opacity: interpolate(frame, [180, 195], [0, 1], { extrapolateRight: 'clamp', extrapolateLeft: 'clamp' }),
@@ -362,6 +376,7 @@ export const MainComposition = () => {
                   <div style={{ color: '#ff6b35', fontSize: 14, fontWeight: 700, letterSpacing: 2, marginBottom: 4 }}>🔥 This Week</div>
                   <div style={{ color: '#ffffff', fontSize: 36, fontWeight: 900 }}>+{weeklyStars} <span style={{ color: '#c0c0c0', fontSize: 18, fontWeight: 500 }}>stars</span></div>
                 </div>
+                )}
               </AbsoluteFill>
             </>
           ) : (
@@ -371,10 +386,12 @@ export const MainComposition = () => {
                 <div style={{ color: '#f0c040', fontSize: 18, fontWeight: 700, letterSpacing: 3, marginBottom: 12 }}>⭐ Total Stars</div>
                 <div style={{ color: COLORS.heading, fontSize: 72, fontWeight: 900 }}>{Number(totalStars.replace(/,/g, '')).toLocaleString()}</div>
               </div>
+              {hasWeeklyStars && (
               <div style={{ background: COLORS.card, borderRadius: 20, padding: '40px 60px', border: `1px solid ${COLORS.border}`, textAlign: 'center' }}>
                 <div style={{ color: '#ff6b35', fontSize: 18, fontWeight: 700, letterSpacing: 3, marginBottom: 12 }}>🔥 This Week</div>
                 <div style={{ color: COLORS.heading, fontSize: 72, fontWeight: 900 }}>+{weeklyStars}</div>
               </div>
+              )}
             </div>
           )}
         </div>
@@ -408,6 +425,7 @@ export const MainComposition = () => {
             </div>
 
             {/* Weekly stars — dark card background */}
+            {hasWeeklyStars && (
             <div style={{
               position: 'absolute', left: '6%', top: '68%',
               opacity: weeklyOpacity,
@@ -417,23 +435,40 @@ export const MainComposition = () => {
               <div style={{ color: '#ff6b35', fontSize: 14, fontWeight: 700, letterSpacing: 2, marginBottom: 4 }}>🔥 This Week</div>
               <div style={{ color: '#ffffff', fontSize: 36, fontWeight: 900 }}>+{weeklyStars} <span style={{ color: '#c0c0c0', fontSize: 18, fontWeight: 500 }}>stars</span></div>
             </div>
+            )}
           </AbsoluteFill>
         )}
 
-        {/* ===== S5: INTRO SCREENSHOT — slow scroll-up ===== */}
+        {/* ===== S5: INTRO SCREENSHOT — scroll only if taller than screen ===== */}
         <AbsoluteFill style={{ ...sceneStyle(4), background: '#ffffff', overflow: 'hidden' }}>
           {screenshotIntroSrc ? (
             (() => {
-              // Smooth scroll from top to bottom of the tall screenshot
               const sceneProgress = interpolate(
                 frame, [S[4].start, S[4].end], [0, 1],
                 { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
               );
-              const scrollY = interpolate(sceneProgress, [0, 1], [0, -200]);
+              if (introFitsScreen) {
+                // Image fits on a single screen — display at natural size
+                return (
+                  <div style={{
+                    width: '100%', height: '100%', display: 'flex',
+                    alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <Img src={screenshotIntroSrc} style={{
+                      width: '100%', height: 'auto', maxHeight: '100%',
+                      objectFit: 'contain',
+                    }} />
+                  </div>
+                );
+              }
+              // Image is taller than screen — scroll to reveal full section
+              const scrollY = interpolate(sceneProgress, [0, 0.1, 1], [0, 0, -65]);
+              const zoom = interpolate(sceneProgress, [0, 0.12, 1], [1, 1.02, 1.06]);
               return (
                 <div style={{
                   width: '100%', height: '100%',
-                  transform: `translateY(${scrollY}%)`,
+                  transform: `translateY(${scrollY}%) scale(${zoom})`,
+                  transformOrigin: 'center top',
                   transition: 'transform 0.1s linear',
                 }}>
                   <Img src={screenshotIntroSrc} style={{
@@ -447,54 +482,101 @@ export const MainComposition = () => {
               {description || 'Project introduction'}
             </div>
           )}
+          {!introFitsScreen && (
           <div style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0, height: 120,
-            background: 'linear-gradient(transparent, rgba(255,255,255,0.7))',
+            position: 'absolute', bottom: 0, left: 0, right: 0, height: 60,
+            background: 'linear-gradient(transparent, rgba(255,255,255,0.85))',
             pointerEvents: 'none',
           }} />
+          )}
         </AbsoluteFill>
 
-        {/* ===== S6: FEATURES ===== */}
-        <AbsoluteFill style={{ ...sceneStyle(5), justifyContent: 'center', alignItems: 'center', flexDirection: 'row', gap: 40, padding: '0 120px', background: '#ffffff' }}>
-          <div style={{ flex: '0 0 55%', display: 'flex', flexDirection: 'column', gap: 12, zIndex: 1 }}>
-            <div style={{ color: COLORS.blueDark, fontSize: 16, fontWeight: 600, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 8 }}>Core Features</div>
-            {features.map((feat, i) => {
-              const isActive = i === currentFeatureIdx;
-              const isPast = i < currentFeatureIdx;
-              const cardOpacity = isActive ? 1 : isPast ? 0.5 : 0.3;
-              const isEntering = isActive
-                ? spring({ frame: frame - S[5].start - featureFrames[i], fps, config: { damping: 12, stiffness: 80 } })
-                : 1;
-              return (
-                <div key={i} style={{
-                  display: 'flex', alignItems: 'center', gap: 16,
-                  padding: '14px 24px', borderRadius: 10,
-                  background: isActive ? `rgba(9,105,218,0.06)` : 'rgba(255,255,255,0.7)',
-                  border: `1px solid ${isActive ? COLORS.blueDark : COLORS.borderDark}`,
-                  borderLeft: `4px solid ${isActive ? COLORS.blueDark : COLORS.borderDark}`,
-                  opacity: cardOpacity,
-                  transform: `translateX(${interpolate(isEntering, [0, 1], [60, 0])}px) scale(${isActive ? 1.03 : 1})`,
-                  backdropFilter: 'blur(4px)',
-                }}>
-                  <span style={{ fontSize: 28, flexShrink: 0 }}>{feat.icon}</span>
-                  <div>
-                    <div style={{ color: COLORS.headingDark, fontSize: 20, fontWeight: 700, fontFamily: 'monospace' }}>{feat.name}</div>
-                    <div style={{ color: COLORS.mutedDark, fontSize: 14, marginTop: 2 }}>{feat.desc}</div>
+        {/* ===== S6: FEATURES or HOW-IT-WORKS fallback ===== */}
+        <AbsoluteFill style={{ ...sceneStyle(5), justifyContent: 'center', alignItems: 'center', background: '#ffffff', overflow: 'hidden' }}>
+          {s6ScreenshotSrc ? (
+            // "How It Works" mode: screenshot with conditional scroll
+            (() => {
+              const sceneProgress = interpolate(
+                frame, [S[5].start, S[5].end], [0, 1],
+                { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
+              );
+              if (s6FitsScreen) {
+                // Image fits on a single screen — display at natural size
+                return (
+                  <div style={{
+                    width: '100%', height: '100%', display: 'flex',
+                    alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    <Img src={s6ScreenshotSrc} style={{
+                      width: '100%', height: 'auto', maxHeight: '100%',
+                      objectFit: 'contain',
+                    }} />
                   </div>
+                );
+              }
+              const scrollY = interpolate(sceneProgress, [0, 0.1, 1], [0, 0, -55]);
+              const zoom = interpolate(sceneProgress, [0, 0.12, 1], [1, 1.02, 1.05]);
+              return (
+                <div style={{
+                  width: '100%', height: '100%',
+                  transform: `translateY(${scrollY}%) scale(${zoom})`,
+                  transformOrigin: 'center top',
+                }}>
+                  <Img src={s6ScreenshotSrc} style={{
+                    width: '100%', height: 'auto', minHeight: '100%',
+                  }} />
                 </div>
               );
-            })}
-          </div>
-          <div style={{ flex: '0 0 35%', background: COLORS.cardDark, borderRadius: 16, padding: 32, border: `1px solid ${COLORS.borderDark}`, boxShadow: '0 4px 16px rgba(0,0,0,0.08)', zIndex: 1 }}>
-            <div style={{ color: COLORS.mutedDark, fontSize: 12, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>About This Project</div>
-            <div style={{ color: COLORS.headingDark, fontSize: 22, fontWeight: 700, marginBottom: 16, lineHeight: 1.4 }}>{description}</div>
-            <div style={{ color: COLORS.textDark, fontSize: 15, lineHeight: 1.6 }}>{language !== 'Unknown' ? `Built with ${language} and designed for professional workflows.` : ''} Star the repo to stay updated with new features and releases.</div>
-            <div style={{ marginTop: 20, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              {[language, 'GitHub Trending', 'Open Source', 'DevTools'].slice(0, 4).map((tag) => (
-                <span key={tag} style={{ padding: '4px 12px', borderRadius: 20, background: 'rgba(9,105,218,0.08)', color: COLORS.blueDark, fontSize: 12, fontWeight: 500 }}>{tag}</span>
-              ))}
+            })()
+          ) : (
+            // Feature cards mode (original)
+            <div style={{ display: 'flex', flexDirection: 'row', gap: 40, padding: '0 120px', width: '100%', height: '100%', alignItems: 'center' }}>
+              <div style={{ flex: '0 0 55%', display: 'flex', flexDirection: 'column', gap: 12, zIndex: 1 }}>
+                <div style={{ color: COLORS.blueDark, fontSize: 16, fontWeight: 600, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 8 }}>Core Features</div>
+                {features.map((feat, i) => {
+                  const isActive = i === currentFeatureIdx;
+                  const isPast = i < currentFeatureIdx;
+                  const cardOpacity = isActive ? 1 : isPast ? 0.5 : 0.3;
+                  const isEntering = isActive
+                    ? spring({ frame: frame - S[5].start - featureFrames[i], fps, config: { damping: 12, stiffness: 80 } })
+                    : 1;
+                  return (
+                    <div key={i} style={{
+                      display: 'flex', alignItems: 'center', gap: 16,
+                      padding: '14px 24px', borderRadius: 10,
+                      background: isActive ? `rgba(9,105,218,0.06)` : 'rgba(255,255,255,0.7)',
+                      border: `1px solid ${isActive ? COLORS.blueDark : COLORS.borderDark}`,
+                      borderLeft: `4px solid ${isActive ? COLORS.blueDark : COLORS.borderDark}`,
+                      opacity: cardOpacity,
+                      transform: `translateX(${interpolate(isEntering, [0, 1], [60, 0])}px) scale(${isActive ? 1.03 : 1})`,
+                      backdropFilter: 'blur(4px)',
+                    }}>
+                      <span style={{ fontSize: 28, flexShrink: 0 }}>{feat.icon}</span>
+                      <div>
+                        <div style={{ color: COLORS.headingDark, fontSize: 20, fontWeight: 700, fontFamily: 'monospace' }}>{feat.name}</div>
+                        <div style={{ color: COLORS.mutedDark, fontSize: 14, marginTop: 2 }}>{feat.desc}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ flex: '0 0 35%', background: COLORS.cardDark, borderRadius: 16, padding: 32, border: `1px solid ${COLORS.borderDark}`, boxShadow: '0 4px 16px rgba(0,0,0,0.08)', zIndex: 1 }}>
+                <div style={{ color: COLORS.mutedDark, fontSize: 12, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>About This Project</div>
+                <div style={{ color: COLORS.headingDark, fontSize: 22, fontWeight: 700, marginBottom: 16, lineHeight: 1.4 }}>{description}</div>
+                <div style={{ color: COLORS.textDark, fontSize: 15, lineHeight: 1.6 }}>{language !== 'Unknown' ? `Built with ${language} and designed for professional workflows.` : ''} Star the repo to stay updated with new features and releases.</div>
+                <div style={{ marginTop: 20, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                  {[language, 'GitHub Trending', 'Open Source', 'DevTools'].slice(0, 4).map((tag) => (
+                    <span key={tag} style={{ padding: '4px 12px', borderRadius: 20, background: 'rgba(9,105,218,0.08)', color: COLORS.blueDark, fontSize: 12, fontWeight: 500 }}>{tag}</span>
+                  ))}
+                </div>
+              </div>
             </div>
-          </div>
+          )}
+          <div style={{
+            position: 'absolute', bottom: 0, left: 0, right: 0, height: 60,
+            background: 'linear-gradient(transparent, rgba(255,255,255,0.85))',
+            pointerEvents: 'none',
+          }} />
         </AbsoluteFill>
 
         {/* ===== S7: OUTRO — modern frontend aesthetic ===== */}

@@ -8,10 +8,13 @@ Usage:
 
 import argparse, json, os, subprocess, sys, time
 
-REMOTION_DIR = "D:/BaiduSyncdisk/Obsidian/ForCC/.claude/skills/github-trending/remotion"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+SKILL_DIR = os.path.dirname(SCRIPT_DIR)
+REMOTION_DIR = os.path.join(SKILL_DIR, "remotion")
 PUBLIC_DIR = os.path.join(REMOTION_DIR, "public")
-OUTPUT_BASE = "D:/BaiduSyncdisk/Obsidian/ForCC/Daily Notes/GitHub Trending"
-REF_AUDIO = "D:/douyincontent/hjf_test.wav"
+OUTPUT_BASE = os.path.join(os.path.expanduser("~"), "Daily Notes", "GitHub Trending")
+REF_AUDIO = os.path.join(SKILL_DIR, "remotion", "public", "reference.wav")
+MODEL_PATH = os.path.join(os.path.expanduser("~"), "voxcpm", "pretrained_models", "VoxCPM2")
 
 DEFAULT_FEATURES = [
     {"name": "/feature-1", "desc": "Core capability description", "icon": "🚀"},
@@ -38,7 +41,7 @@ def generate_narration_text(repo, weekly_stars, description, features, language)
 
 
 def generate_voxcpm(text, output_name="narration.wav"):
-    """Generate voiceover via VoxCPM HuggingFace API with reference audio."""
+    """Generate voiceover via local VoxCPM model with reference audio."""
     output_path = os.path.join(PUBLIC_DIR, output_name)
     if os.path.exists(output_path):
         print(f"Audio already exists: {output_path}")
@@ -48,29 +51,25 @@ def generate_voxcpm(text, output_name="narration.wav"):
         print(f"WARNING: Reference audio not found at {REF_AUDIO}, skipping voiceover")
         return None
 
+    if not os.path.exists(MODEL_PATH):
+        print(f"WARNING: VoxCPM model not found at {MODEL_PATH}, skipping voiceover")
+        return None
+
     print(f"Generating VoxCPM voiceover ({len(text)} chars)...")
     try:
-        from gradio_client import Client
-        from gradio_client.utils import handle_file
+        from voxcpm import VoxCPM
+        import soundfile as sf
 
-        client = Client('openbmb/VoxCPM-Demo')
-        result = client.predict(
-            text_input=text,
-            control_instruction='',
-            reference_wav_path_input=handle_file(REF_AUDIO),
-            use_prompt_text=False,
-            prompt_text_input='',
-            cfg_value_input=2.0,
-            do_normalize=False,
-            denoise=False,
-            api_name='/generate',
+        model = VoxCPM.from_pretrained(MODEL_PATH, load_denoiser=False)
+        wav = model.generate(
+            text="(正常语速，温柔)" + text,
+            reference_wav_path=REF_AUDIO,
+            cfg_value=2.0,
+            inference_timesteps=10,
         )
-
-        if result and isinstance(result, str):
-            import shutil
-            shutil.copy(result, output_path)
-            print(f"Voiceover saved: {output_path}")
-            return output_name
+        sf.write(output_path, wav, model.tts_model.sample_rate)
+        print(f"Voiceover saved: {output_path}")
+        return output_name
     except Exception as e:
         print(f"VoxCPM generation failed: {e}")
     return None
