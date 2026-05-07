@@ -246,8 +246,8 @@ def cdp_screenshots(url, base_name, heading=None, heading_index=0,
     if content_w <= 0 or content_h <= 0:
         raise RuntimeError(f"Invalid section dimensions: {content_w}x{content_h}")
 
-    # Step B: resize viewport to section height (keep 1920 width for layout stability)
-    viewport_h = max(content_h + 60, 600)
+    # Step B: resize viewport to section height, capped at 1080px (one screen)
+    viewport_h = min(max(content_h + 60, 600), 1080)
     print(f"Resizing viewport to 1920x{viewport_h}...")
     send('Emulation.setDeviceMetricsOverride', {
         'width': 1920,
@@ -391,7 +391,7 @@ def cdp_screenshots(url, base_name, heading=None, heading_index=0,
             s6_px, s6_py, s6_pw, s6_ph = 378, 2496, 838, 2000
 
         if s6_pw > 0 and s6_ph > 0:
-            s6_viewport_h = max(s6_ph + 60, 600)
+            s6_viewport_h = min(max(s6_ph + 60, 600), 1080)
             send('Emulation.setDeviceMetricsOverride', {
                 'width': 1920, 'height': s6_viewport_h,
                 'deviceScaleFactor': 1, 'mobile': False
