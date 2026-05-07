@@ -885,6 +885,7 @@ def extract_chinese_description(readme_text, fallback_desc, topics):
     what_is_text = ""
     matched_heading = ""
     heading_index = 0
+    categories = []
 
     # ── Pass 0: extract intro paragraphs before the first ## heading ──
     # Many READMEs put their best description here, before any section
@@ -1020,7 +1021,6 @@ def extract_chinese_description(readme_text, fallback_desc, topics):
                 matched_heading = current_heading
 
         # ── Pass 3: count categories for awesome-list projects ──
-        categories = []
         current_cat = None
         for line in lines:
             stripped = line.strip()
