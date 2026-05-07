@@ -882,123 +882,158 @@ def extract_chinese_description(readme_text, fallback_desc, topics):
     matched_heading = ""
     heading_index = 0
 
-    # ── Pass 1: find best matching section by priority ──
-    # Collect ALL h2 sections with scores
-    sections = []  # [(heading_text, heading_index, cleaned_text, score, raw_text)]
-    h2_count = 0
-    current_heading = ""
-    current_lines = []
+    # ── Pass 0: extract intro paragraphs before the first ## heading ──
+    # Many READMEs put their best description here, before any section
+    intro_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if _re.match(r"^##\s+", stripped):
+            break
+        # Skip HTML divs, badges, images, code blocks, blockquotes, horizontal rules
+        if stripped.startswith("<") or stripped.startswith("```") or stripped.startswith("---"):
+            continue
+        if stripped.startswith("[!") or stripped.startswith("> "):
+            continue
+        if not stripped or stripped.startswith("#"):
+            continue
+        # Skip badge/shield lines
+        if "shields.io" in stripped.lower() or "badge" in stripped.lower():
+            continue
+        intro_lines.append(stripped)
 
-    def _finish_section():
-        nonlocal current_heading, current_lines
-        if current_lines and current_heading:
-            raw = " ".join(current_lines)
-            text = _clean_md(raw)
-            if len(text) > 20:
-                h_clean = _normalize_heading(current_heading)
-                score = 0
-                if _heading_contains(h_clean, value_headings):
-                    score = 10
-                elif _heading_contains(h_clean, intro_headings):
-                    score = 5
-                elif not _is_skip_heading(h_clean):
-                    score = 2
-                if score > 0:
-                    sections.append((current_heading, h2_count, text, score, raw))
+    intro_text = _clean_md(" ".join(intro_lines))
+    # Only use if it's actually descriptive (not just a tagline or badges)
+    if len(intro_text) > 40:
+        what_is_text = intro_text
+        # Use the first h2 heading for screenshot targeting
+        for line in lines:
+            m = _re.match(r"^##\s+", line.strip())
+            if m:
+                matched_heading = line.strip()[2:].strip()
+                heading_index = 1
+                break
+
+    # ── Pass 1+2+3: only run if intro paragraphs didn't yield good content ──
+    if what_is_text:
+        # Already got a good description from intro paragraphs — use it directly
+        pass
+    else:
+        # Collect ALL h2 sections with scores
+        sections = []  # [(heading_text, heading_index, cleaned_text, score, raw_text)]
+        h2_count = 0
         current_heading = ""
         current_lines = []
 
-    for line in lines:
-        stripped = line.strip()
+        def _finish_section():
+            nonlocal current_heading, current_lines
+            if current_lines and current_heading:
+                raw = " ".join(current_lines)
+                text = _clean_md(raw)
+                if len(text) > 20:
+                    h_clean = _normalize_heading(current_heading)
+                    score = 0
+                    if _heading_contains(h_clean, value_headings):
+                        score = 10
+                    elif _heading_contains(h_clean, intro_headings):
+                        score = 5
+                    elif not _is_skip_heading(h_clean):
+                        score = 2
+                    if score > 0:
+                        sections.append((current_heading, h2_count, text, score, raw))
+            current_heading = ""
+            current_lines = []
 
-        # Blockquote tagline
-        if stripped.startswith("> ") and not tagline:
-            t = _clean_md(stripped[2:])
-            if len(t) > 15 and not any(w in t.lower() for w in
-                ["want ", "get started", "try it", "see how", "check out", "click here", "sign up"]):
-                tagline = t
-
-        m = _re.match(r"^##\s+", stripped)
-        if m:
-            _finish_section()
-            current_heading = stripped[2:].strip()
-            h2_count += 1
-            continue
-
-        if current_heading and stripped and not stripped.startswith("#") and not stripped.startswith("<!--"):
-            if len(current_lines) < 30:
-                current_lines.append(stripped)
-
-    _finish_section()
-
-    # Pick the best section: blend heading relevance with content quality
-    # Check RAW text (before _clean_md) for table indicators — pipes, separators
-    scored = []
-    for heading, idx, cleaned_text, score, raw_text in sections:
-        pipe_ratio = raw_text.count("|") / max(len(raw_text), 1)
-        dash_lines = len(re.findall(r"[-=]{3,}", raw_text))
-        # Quality factor: 1.0 for prose, <0.5 for table-heavy sections
-        quality_factor = 1.0
-        if pipe_ratio > 0.03 or dash_lines > 1:
-            quality_factor = max(0.2, 1.0 - pipe_ratio * 25)
-        elif pipe_ratio > 0.01:
-            quality_factor = 0.8
-        effective_score = round(score * quality_factor, 1)
-        prose_len = len(cleaned_text)
-        scored.append((heading, idx, cleaned_text, effective_score, prose_len))
-
-    scored.sort(key=lambda s: (s[3], s[4]), reverse=True)
-    if scored:
-        best = scored[0]
-        what_is_text = best[2]
-        matched_heading = best[0]
-        heading_index = best[1]
-
-    # ── Pass 2: if no section found, try first substantive paragraph ──
-    if not what_is_text:
-        in_section = False
         for line in lines:
             stripped = line.strip()
+
+            # Blockquote tagline
+            if stripped.startswith("> ") and not tagline:
+                t = _clean_md(stripped[2:])
+                if len(t) > 15 and not any(w in t.lower() for w in
+                    ["want ", "get started", "try it", "see how", "check out", "click here", "sign up"]):
+                    tagline = t
+
             m = _re.match(r"^##\s+", stripped)
             if m:
-                _finish_section()  # clean up
-                h_clean = _normalize_heading(stripped[2:].strip())
-                if _is_skip_heading(h_clean):
-                    in_section = False
-                    continue
-                if in_section:
-                    break
-                in_section = True
+                _finish_section()
                 current_heading = stripped[2:].strip()
-                current_lines = []
+                h2_count += 1
                 continue
-            if in_section and stripped and not stripped.startswith("#") and not stripped.startswith("<!--") and not stripped.startswith(">"):
-                current_lines.append(stripped)
-                if len(" ".join(current_lines)) > 600:
-                    break
-        if current_lines:
-            what_is_text = _clean_md(" ".join(current_lines))
-            matched_heading = current_heading
 
-    # ── Pass 3: count categories for awesome-list projects ──
-    categories = []
-    current_cat = None
-    for line in lines:
-        stripped = line.strip()
-        if _re.match(r"^###\s+", stripped):
-            name = _normalize_heading(stripped[3:].strip())
-            if name and not _is_skip_heading(name):
-                current_cat = {"name": name, "count": 0}
-                categories.append(current_cat)
-            continue
-        if _re.match(r"^##\s+", stripped):
-            h_clean = _normalize_heading(stripped[2:].strip())
-            if _heading_contains(h_clean, ["skill", "feature", "功能", "category", "分类"]):
-                current_cat = None
+            if current_heading and stripped and not stripped.startswith("#") and not stripped.startswith("<!--"):
+                if len(current_lines) < 30:
+                    current_lines.append(stripped)
+
+        _finish_section()
+
+        # Pick the best section: blend heading relevance with content quality
+        # Check RAW text (before _clean_md) for table indicators — pipes, separators
+        scored = []
+        for heading, idx, cleaned_text, score, raw_text in sections:
+            pipe_ratio = raw_text.count("|") / max(len(raw_text), 1)
+            dash_lines = len(re.findall(r"[-=]{3,}", raw_text))
+            # Quality factor: 1.0 for prose, <0.5 for table-heavy sections
+            quality_factor = 1.0
+            if pipe_ratio > 0.03 or dash_lines > 1:
+                quality_factor = max(0.2, 1.0 - pipe_ratio * 25)
+            elif pipe_ratio > 0.01:
+                quality_factor = 0.8
+            effective_score = round(score * quality_factor, 1)
+            prose_len = len(cleaned_text)
+            scored.append((heading, idx, cleaned_text, effective_score, prose_len))
+
+        scored.sort(key=lambda s: (s[3], s[4]), reverse=True)
+        if scored:
+            best = scored[0]
+            what_is_text = best[2]
+            matched_heading = best[0]
+            heading_index = best[1]
+
+        # ── Pass 2: if no section found, try first substantive paragraph ──
+        if not what_is_text:
+            in_section = False
+            for line in lines:
+                stripped = line.strip()
+                m = _re.match(r"^##\s+", stripped)
+                if m:
+                    _finish_section()  # clean up
+                    h_clean = _normalize_heading(stripped[2:].strip())
+                    if _is_skip_heading(h_clean):
+                        in_section = False
+                        continue
+                    if in_section:
+                        break
+                    in_section = True
+                    current_heading = stripped[2:].strip()
+                    current_lines = []
+                    continue
+                if in_section and stripped and not stripped.startswith("#") and not stripped.startswith("<!--") and not stripped.startswith(">"):
+                    current_lines.append(stripped)
+                    if len(" ".join(current_lines)) > 600:
+                        break
+            if current_lines:
+                what_is_text = _clean_md(" ".join(current_lines))
+                matched_heading = current_heading
+
+        # ── Pass 3: count categories for awesome-list projects ──
+        categories = []
+        current_cat = None
+        for line in lines:
+            stripped = line.strip()
+            if _re.match(r"^###\s+", stripped):
+                name = _normalize_heading(stripped[3:].strip())
+                if name and not _is_skip_heading(name):
+                    current_cat = {"name": name, "count": 0}
+                    categories.append(current_cat)
                 continue
-            current_cat = None
-        if current_cat and _re.match(r"^[-*]\s+", stripped) and len(stripped) > 8:
-            current_cat["count"] += 1
+            if _re.match(r"^##\s+", stripped):
+                h_clean = _normalize_heading(stripped[2:].strip())
+                if _heading_contains(h_clean, ["skill", "feature", "功能", "category", "分类"]):
+                    current_cat = None
+                    continue
+                current_cat = None
+            if current_cat and _re.match(r"^[-*]\s+", stripped) and len(stripped) > 8:
+                current_cat["count"] += 1
 
     # ── Build description text ──
     parts = []
