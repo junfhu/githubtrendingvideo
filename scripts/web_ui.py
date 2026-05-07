@@ -769,7 +769,7 @@ def save_props(data: dict):
 # ── Helpers ────────────────────────────────────────────────────────────────
 
 def _strip_html(text):
-    """Remove HTML tags and entities, keeping only readable content."""
+    """Remove HTML tags, entities, and emoji — keep only readable text."""
     text = re.sub(r"<!--.*?-->", "", text, flags=re.DOTALL)
     text = re.sub(r"<(?:br|p|/p|/div|/li|/tr)\s*/?>", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"<[^>]+>", "", text)
@@ -777,6 +777,10 @@ def _strip_html(text):
     text = text.replace("&quot;", '"').replace("&#39;", "'").replace("&apos;", "'")
     text = text.replace("&nbsp;", " ").replace("&#x27;", "'")
     text = re.sub(r"&#?\w+;", " ", text)
+    # Strip emoji and other unicode symbols (keep CJK, Latin, numbers, basic punctuation)
+    text = re.sub(r'[\U0001F300-\U0001F9FF\U0001FA00-\U0001FAFF'
+                  r'☀-➿⭐✅❌✨❤'
+                  r'⬆➡⚙⚡]', '', text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
