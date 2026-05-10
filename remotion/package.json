@@ -7,9 +7,13 @@
     "build": "remotion render"
   },
   "dependencies": {
+    "@remotion/google-fonts": "4.0.457",
+    "@remotion/media": "4.0.457",
+    "@remotion/transitions": "4.0.457",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "remotion": "^4.0.456"
+    "remotion": "^4.0.456",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@remotion/cli": "^4.0.456",

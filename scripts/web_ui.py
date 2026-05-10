@@ -67,10 +67,11 @@ def github_api_get(path, timeout=15):
             time.sleep(1)
 REMOTION_DIR = os.path.join(SKILL_DIR, "remotion")
 PUBLIC_DIR = os.path.join(REMOTION_DIR, "public")
-REF_AUDIO = "/home/ppcorn/qwen3tts/hjf_test.wav"
-REF_TEXT = "这是一个测试录音，我们看看它的效果如何。"
 OUTPUT_DIR = os.path.join(SKILL_DIR, "output")
 TRENDING_FILE = os.path.join(SKILL_DIR, "trending.json")
+
+# Edge TTS voice for Chinese narration
+EDGE_TTS_VOICE = os.environ.get("EDGE_TTS_VOICE", "zh-CN-YunxiNeural")
 
 os.makedirs(PUBLIC_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
@@ -148,6 +149,150 @@ def _number_to_chinese(n):
         if need_zero:
             result += "零"
     return result
+
+
+def extract_demo_images(readme_text, repo, max_images=5):
+    """Extract demo/output images from README for visual showcase scenes.
+
+    Looks for images in sections like: Demo, Example, Screenshot, Output, Usage, Results.
+    Downloads them to remotion/public/ as demo_<repo>_<index>.png
+
+    Returns: list of filenames (relative to public/) that were downloaded successfully.
+    """
+    import re as _re
+    import base64
+    from PIL import Image
+    import io
+
+    lines = readme_text.split("\n")
+
+    # Sections that typically contain demo/output images
+    demo_headings = [
+        "demo", "example", "screenshot", "output", "result", "showcase",
+        "visualization", "preview", "gallery", "usage", "what you get",
+        "演示", "示例", "截图", "效果", "展示", "可视化", "预览", "用法",
+        "getting started", "quick start", "install",
+    ]
+    skip_headings = [
+        "install", "installation", "contributing", "license", "changelog",
+        "安装", "贡献", "许可证", "更新日志",
+    ]
+
+    # Collect image URLs from README, prioritizing demo sections
+    in_demo_section = False
+    section_score = 0  # higher = more likely to be a demo image
+    image_candidates = []  # (url, score)
+
+    # Also check intro paragraphs (before first ##) for hero images
+    in_intro = True
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Track section headings
+        m2 = _re.match(r"^##\s+", stripped)
+        m3 = _re.match(r"^###\s+", stripped)
+        if m2 or m3:
+            heading = stripped.lstrip("#").strip()
+            h_lower = _normalize_heading(heading).lower()
+            in_intro = False
+
+            if any(kw in h_lower for kw in skip_headings):
+                in_demo_section = False
+                section_score = 0
+                continue
+
+            if any(kw in h_lower for kw in demo_headings):
+                in_demo_section = True
+                section_score = 10 if any(kw in h_lower for kw in ["demo", "example", "screenshot", "效果", "演示", "示例"]) else 5
+            else:
+                in_demo_section = False
+                section_score = 0
+            continue
+
+        # Extract image URLs from markdown: ![alt](url) or <img src="url">
+        # Markdown images
+        for m in _re.finditer(r'!\[([^\]]*)\]\(([^)]+)\)', stripped):
+            alt_text = m.group(1).lower()
+            url = m.group(2).strip()
+            score = section_score if in_demo_section else (3 if in_intro else 1)
+            # Boost score if alt text suggests demo content
+            if any(kw in alt_text for kw in ["demo", "example", "output", "result", "screenshot", "preview"]):
+                score += 5
+            # Skip badges, shields, tiny icons
+            if any(skip in url.lower() for skip in ["shields.io", "badge", "codecov", "travis-ci", "circleci", "github-actions"]):
+                continue
+            if url.startswith("http"):
+                image_candidates.append((url, score))
+
+        # HTML img tags
+        for m in _re.finditer(r'<img[^>]+src=["\']([^"\']+)["\']', stripped):
+            url = m.group(1).strip()
+            score = section_score if in_demo_section else (3 if in_intro else 1)
+            if any(skip in url.lower() for skip in ["shields.io", "badge", "codecov"]):
+                continue
+            if url.startswith("http"):
+                image_candidates.append((url, score))
+
+    # Sort by score (descending) and deduplicate
+    image_candidates.sort(key=lambda x: -x[1])
+    seen_urls = set()
+    unique_candidates = []
+    for url, score in image_candidates:
+        if url not in seen_urls:
+            seen_urls.add(url)
+            unique_candidates.append((url, score))
+
+    # Download top images
+    safe_name = repo.replace("/", "-")
+    downloaded = []
+    ctx = ssl.create_default_context()
+
+    for i, (url, score) in enumerate(unique_candidates[:max_images * 2]):
+        if len(downloaded) >= max_images:
+            break
+        fname = f"demo_{safe_name}_{len(downloaded)}.png"
+        fpath = os.path.join(PUBLIC_DIR, fname)
+
+        try:
+            # Handle relative URLs (convert to absolute GitHub raw URL)
+            if url.startswith("/") and not url.startswith("//"):
+                # Relative path on GitHub — construct raw URL
+                owner, name = repo.split("/", 1)
+                # Default branch detection would need API call; try main/master
+                raw_base = f"https://raw.githubusercontent.com/{owner}/{name}/main"
+                url = raw_base + url
+
+            req = urllib.request.Request(url, headers={
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "image/*",
+            })
+            with urllib.request.urlopen(req, timeout=15, context=ctx) as resp:
+                data = resp.read()
+
+            # Validate it's actually an image (min 5KB, max 10MB)
+            if len(data) < 5000 or len(data) > 10_000_000:
+                continue
+
+            # Convert to PNG via PIL for consistent format
+            img = Image.open(io.BytesIO(data))
+            if img.width < 200 or img.height < 100:
+                continue  # Skip tiny images (icons, badges)
+
+            # Resize large images to max 1920px wide for Remotion performance
+            if img.width > 1920:
+                ratio = 1920 / img.width
+                img = img.resize((1920, int(img.height * ratio)), Image.LANCZOS)
+
+            img.save(fpath, "PNG")
+            downloaded.append(fname)
+            print(f"  Demo image: {fname} ({img.width}x{img.height}, score={score})")
+
+        except Exception as e:
+            print(f"  Demo image download failed ({url}): {e}")
+            continue
+
+    return downloaded
 
 
 def normalize_for_tts(text):
@@ -369,8 +514,13 @@ def select_project(data: dict):
         chinese_desc = desc_data.get("text", "") if isinstance(desc_data, dict) else desc_data
         intro_heading = desc_data.get("heading", "") if isinstance(desc_data, dict) else ""
         intro_heading_index = desc_data.get("heading_index", 0) if isinstance(desc_data, dict) else 0
+
+        # Extract demo images from README for visual showcase scenes
+        demo_images = extract_demo_images(readme_text, repo, max_images=5)
+        print(f"Extracted {len(demo_images)} demo images for {repo}")
     except Exception as e:
         print(f"README fetch error: {e}")
+        demo_images = []
 
     # Try to fetch community profile for more metadata
     try:
@@ -404,6 +554,7 @@ def select_project(data: dict):
         "s6Heading": s6_heading,
         "s6HeadingIndex": s6_heading_index,
         "s6Screenshot": "",
+        "demoImages": demo_images if demo_images else [],
         "audio": "",
         "durationSeconds": max(15, len(narration) * 0.25),
         "sceneDurations": {},
@@ -567,52 +718,36 @@ def take_screenshot(data: dict):
 # ── API: Generate audio ────────────────────────────────────────────────────
 
 def _generate_all_audio(texts_dict, output_dir, base_name):
-    """Generate multiple audio files using local VoxCPM (one model load). Returns {label: duration}."""
-    from voxcpm import VoxCPM
-    import soundfile as sf
-
-    model_path = os.path.join(os.path.expanduser("~"), "voxcpm", "pretrained_models", "VoxCPM2")
-    if not os.path.exists(model_path):
-        raise RuntimeError(f"VoxCPM model not found at {model_path}")
-
-    print("Loading VoxCPM model (one-time)...")
-    model = VoxCPM.from_pretrained(model_path, load_denoiser=False)
-
-    use_ref = os.path.exists(REF_AUDIO)
-    ref_wav = REF_AUDIO if use_ref else None
-
-    # Prompt-based warm-up for better voice cloning quality
-    if use_ref:
-        try:
-            print("  Warm-up voice clone...")
-            model.generate(
-                text="(正常语速，温柔)GitHub热门项目介绍。",
-                prompt_wav_path=ref_wav,
-                prompt_text=REF_TEXT,
-                reference_wav_path=ref_wav,
-                cfg_value=2.0,
-                inference_timesteps=10,
-            )
-            print("  Warm-up done")
-        except Exception as e:
-            print(f"  Warm-up failed (non-fatal): {e}")
+    """Generate multiple audio files using Edge TTS. Returns {label: duration}."""
+    import asyncio
+    import edge_tts
 
     durations = {}
     for label, text in texts_dict.items():
         if not text:
             continue
         text = normalize_for_tts(text)
-        out_path = os.path.join(output_dir, f"narration_{base_name}_{label}.wav")
+        out_path = os.path.join(output_dir, f"narration_{base_name}_{label}.mp3")
         print(f"  Generating {label} ({len(text)} chars)...")
+
+        async def _gen():
+            communicate = edge_tts.Communicate(text, EDGE_TTS_VOICE, rate="+10%")
+            await communicate.save(out_path)
+
         try:
-            wav = model.generate(
-                text="(正常语速，温柔)" + text,
-                reference_wav_path=ref_wav,
-                cfg_value=2.0,
-                inference_timesteps=10,
-            )
-            sf.write(out_path, wav, model.tts_model.sample_rate)
-            dur = len(wav) / model.tts_model.sample_rate
+            asyncio.run(_gen())
+            # Measure duration via ffprobe
+            try:
+                result = subprocess.run(
+                    ["ffprobe", "-v", "quiet", "-print_format", "json",
+                     "-show_entries", "format=duration", out_path],
+                    capture_output=True, text=True, timeout=5,
+                )
+                info = json.loads(result.stdout)
+                dur = float(info["format"]["duration"])
+            except Exception:
+                # Fallback: estimate from file size (mp3 ~24kbps for Edge TTS)
+                dur = os.path.getsize(out_path) / 3000
             durations[label] = round(dur, 2)
             print(f"  {label}: {dur:.1f}s")
         except Exception as e:
@@ -631,54 +766,20 @@ def generate_audio(data: dict):
     repo = data.get("repo", "repo")
     safe_name = repo.replace("/", "-")
     scene_texts = data.get("scene_texts", {})
-    combined_name = f"narration_{safe_name}.wav"
+    combined_name = f"narration_{safe_name}.mp3"
 
     # Build all texts to generate: 7 scenes + 1 combined
     all_texts = dict(scene_texts) if scene_texts else {}
     all_texts["combined"] = text
 
     try:
-        # Try local VoxCPM first (one model load for all)
         durations = _generate_all_audio(all_texts, PUBLIC_DIR, safe_name)
         combined_dur = durations.pop("combined", sum(durations.values()))
     except Exception as e:
-        print(f"Local VoxCPM failed: {e}, trying HuggingFace...")
-        # Fallback to HuggingFace Space
-        try:
-            from gradio_client import Client
-            from gradio_client.utils import handle_file
-            client = Client("openbmb/VoxCPM-Demo")
-            ref_file = handle_file(REF_AUDIO) if os.path.exists(REF_AUDIO) else None
-
-            durations = {}
-            for label, scene_text in all_texts.items():
-                if not scene_text:
-                    continue
-                out_path = os.path.join(PUBLIC_DIR, f"narration_{safe_name}_{label}.wav")
-                text_norm = normalize_for_tts(scene_text)
-                result = client.predict(
-                    text_input=text_norm, control_instruction="",
-                    reference_wav_path_input=ref_file,
-                    use_prompt_text=False, prompt_text_input="",
-                    cfg_value_input=2.0, do_normalize=False, denoise=False,
-                    api_name="/generate",
-                )
-                if result and isinstance(result, str):
-                    import shutil
-                    shutil.copy(result, out_path)
-                    try:
-                        import wave
-                        with wave.open(out_path, "r") as wf:
-                            dur = wf.getnframes() / wf.getframerate()
-                    except Exception:
-                        dur = len(scene_text) * 0.25
-                    durations[label] = round(dur, 2)
-            combined_dur = durations.pop("combined", sum(durations.values()))
-        except Exception as e2:
-            raise HTTPException(500, f"Both local VoxCPM and HuggingFace failed: {e2}")
+        raise HTTPException(500, f"Edge TTS generation failed: {e}")
 
     # Rename combined file to standard name
-    combined_src = os.path.join(PUBLIC_DIR, f"narration_{safe_name}_combined.wav")
+    combined_src = os.path.join(PUBLIC_DIR, f"narration_{safe_name}_combined.mp3")
     combined_dst = os.path.join(PUBLIC_DIR, combined_name)
     if os.path.exists(combined_src):
         if os.path.exists(combined_dst):
@@ -692,32 +793,35 @@ def generate_audio(data: dict):
             durations[s] = 2.0
 
     total_dur = sum(durations[s] for s in ['s1', 's2', 's3', 's4', 's5', 's6', 's7'])
-    # Concatenate per-scene WAVs using Python's wave module (ffmpeg concat produces broken headers)
-    import wave as _wave
+    # Concatenate per-scene MP3s using ffmpeg (MP3 concat requires ffmpeg, not Python wave module)
     combined_path = os.path.join(PUBLIC_DIR, combined_name)
     scene_order = ['s1', 's2', 's3', 's4', 's5', 's6', 's7']
-    wav_readers = []
-    total_frames = 0
-    params = None
+    mp3_files = []
     for s in scene_order:
-        wav_path = os.path.join(PUBLIC_DIR, f"narration_{safe_name}_{s}.wav")
-        if os.path.exists(wav_path):
-            wf = _wave.open(wav_path, 'rb')
-            wav_readers.append(wf)
-            total_frames += wf.getnframes()
-            if params is None:
-                params = wf.getparams()
-    if wav_readers and params:
-        with _wave.open(combined_path, 'wb') as out:
-            out.setparams(params)
-            out.setnframes(total_frames)
-            for wf in wav_readers:
-                wf.rewind()
-                out.writeframes(wf.readframes(wf.getnframes()))
-                wf.close()
-        print(f"Concatenated {len(wav_readers)} scene WAVs → {combined_path} ({total_frames} frames, {total_dur:.1f}s)")
+        mp3_path = os.path.join(PUBLIC_DIR, f"narration_{safe_name}_{s}.mp3")
+        if os.path.exists(mp3_path):
+            mp3_files.append(mp3_path)
+
+    if mp3_files:
+        # Create concat list file for ffmpeg
+        concat_list = os.path.join(PUBLIC_DIR, f"_concat_{safe_name}.txt")
+        with open(concat_list, "w") as f:
+            for mp3 in mp3_files:
+                f.write(f"file '{mp3}'\n")
+        try:
+            subprocess.run(
+                ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_list,
+                 "-c", "copy", combined_path],
+                capture_output=True, text=True, timeout=30,
+            )
+            print(f"Concatenated {len(mp3_files)} scene MP3s → {combined_path} ({total_dur:.1f}s)")
+        except Exception as e:
+            print(f"ffmpeg concat failed: {e}, using combined file as-is")
+        finally:
+            if os.path.exists(concat_list):
+                os.remove(concat_list)
     else:
-        print("WARNING: no scene WAVs found, keeping TTS combined file")
+        print("WARNING: no scene MP3s found, keeping TTS combined file")
 
     print(f"Scene durations: {durations}, total: {total_dur:.1f}s")
 

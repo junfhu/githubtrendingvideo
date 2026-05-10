@@ -24,9 +24,9 @@ curl -s "https://github.com/trending?since=weekly" -o "<skill-dir>/trending.html
 
 然后用 Python 解析 HTML。解析脚本位于 `scripts/fetch_trending.py`，输出格式：`序号|owner/repo|周增星数|总星数|语言|描述`
 
-> 💡 制作宣传视频（7场景：S1开场→S2项目卡片→S3页面截图→S4星标放大+红圈→S5 README滚动→S6功能介绍→S7结尾），使用 `/trending-to-video`。Web 管理台端口 8765，支持 `?repo=owner/name` 直达。语音优先本地 VoxCPM，回退 HuggingFace。启动：
+> 💡 制作宣传视频（7场景：S1开场→S2项目卡片→S3页面截图→S4星标放大+红圈→S5演示图片/README滚动→S6功能介绍→S7结尾），使用 `/trending-to-video`。Web 管理台端口 8765，支持 `?repo=owner/name` 直达。语音使用 Edge TTS（`zh-CN-YunxiNeural`）。启动：
 > ```bash
-> source /home/ppcorn/miniconda3/etc/profile.d/conda.sh && conda activate voxcpm && python3 <skill-dir>/scripts/web_ui.py --port 8765
+> python3 <skill-dir>/scripts/web_ui.py --port 8765
 > ```
 
 如果 Trending 页面抓取失败（如被限流），回退为搜索 API：

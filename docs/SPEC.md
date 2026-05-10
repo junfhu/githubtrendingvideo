@@ -2,7 +2,7 @@
 
 ## Objective
 
-Full pipeline: fetch GitHub trending repos → select one (or paste any URL) → auto-produce a 7-scene Chinese-narrated promo video with Remotion + VoxCPM TTS.
+Full pipeline: fetch GitHub trending repos → select one (or paste any URL) → auto-produce a 7-scene Chinese-narrated promo video with Remotion + Edge TTS.
 
 **User**: Content creator making daily GitHub project spotlight videos.
 **Success**: One-click video from trending list or custom URL → downloadable MP4.
@@ -21,7 +21,7 @@ curl trending.html → fetch_trending.py → trending.json
           │  /api/trending             │  List projects
           │  /api/select-project       │  GitHub API + README parse
           │  /api/screenshot           │  Chrome CDP capture
-          │  /api/generate-audio       │  VoxCPM TTS + concatenation
+          │  /api/generate-audio       │  Edge TTS + concatenation
           │  /api/build-video          │  npx remotion render
           └────────────────────────────┘
                     │
@@ -70,7 +70,7 @@ remotion/
 | `/api/trending/fetch` | GET | Re-fetch + parse GitHub trending |
 | `/api/select-project` | POST | Fetch repo, extract features, generate narration → `props.json` |
 | `/api/screenshot` | POST | Chrome CDP: top + intro + optional S6 screenshots |
-| `/api/generate-audio` | POST | VoxCPM TTS → 7 scene WAVs, concatenated → `props.json` |
+| `/api/generate-audio` | POST | Edge TTS → 7 scene MP3s, concatenated → `props.json` |
 | `/api/remotion/status` | GET | Check if Remotion Studio running on :3000 |
 | `/api/remotion/start` | POST | Start `npx remotion studio` in background |
 | `/api/build-video` | POST | `npx remotion render` → poll for completion |
@@ -90,7 +90,7 @@ All scenes use `fade` enter/exit. Frame ranges computed from per-scene audio dur
 | S2 | Project Card | White card: name, language badge, description, star stats |
 | S3 | Screenshot | Full page screenshot with star count overlay |
 | S4 | Star Zoom | Screenshot zoomed 1.6× into star button area |
-| S5 | Intro README | Full-width README screenshot (scroll if >1080px tall) |
+| S5 | Demo Images / Intro | **With demo images**: ken-burns carousel of project output screenshots; **Without**: README screenshot (scroll if >1080px tall) |
 | S6 | Features | Feature cards (6 rows) or How-It-Works screenshot fallback |
 | S7 | Outro | Purple gradient, "关注我，获得最新的实用项目信息" |
 
@@ -117,8 +117,9 @@ Total frames: `ceil(durationSeconds × 30) + 15` (15-frame tail padding).
 3. `extract_features(readme)` → 6 features `[{icon, name, desc}]`
 4. `extract_chinese_description(readme)` → translated intro paragraph + target heading
 5. `extract_how_it_works(readme)` → S6 fallback if features lack substance (<3 substantial)
-6. `generate_narration(name, stars, ...)` → Chinese text with character-position timing cues
-7. Write `props.json`
+6. `extract_demo_images(readme, repo)` → download up to 5 demo/output images from README → `demo_<repo>_<N>.png` in public/
+7. `generate_narration(name, stars, ...)` → Chinese text with character-position timing cues
+8. Write `props.json`
 
 ### Step 2: Screenshot → `POST /api/screenshot`
 1. Launch Chromium `--headless=new --remote-debugging-port=9222`
@@ -131,12 +132,13 @@ Total frames: `ceil(durationSeconds × 30) + 15` (15-frame tail padding).
 8. Update `props.json` with filenames + screenshot heights
 
 ### Step 3: Audio → `POST /api/generate-audio`
-1. Generate 7 per-scene WAVs via local VoxCPM model
-   - Fallback: HuggingFace Space `openbmb/VoxCPM-Demo`
-   - Voice clone from `reference.wav` with CFG 2.0, 10 inference steps
-2. Concatenate per-scene WAVs using Python `wave` module (ffmpeg produces broken headers)
-3. Store exact measured durations as `sceneDurations`
-4. Update `props.json` with audio path, `durationSeconds`, `sceneDurations`
+1. Generate 7 per-scene MP3s via Edge TTS (`zh-CN-YunxiNeural`)
+   - Voice configurable via `EDGE_TTS_VOICE` env var
+   - Free cloud service, no local model or GPU required
+2. Measure each MP3 duration via ffprobe
+3. Concatenate per-scene MP3s using ffmpeg concat demuxer
+4. Store exact measured durations as `sceneDurations`
+5. Update `props.json` with audio path, `durationSeconds`, `sceneDurations`
 
 ### Step 4: Render → `POST /api/build-video`
 1. Write props to `props.json`
@@ -149,11 +151,14 @@ Total frames: `ceil(durationSeconds × 30) + 15` (15-frame tail padding).
 
 | Decision | Rationale |
 |----------|-----------|
-| Concatenated scene WAVs over combined TTS | Guarantees perfect audio-visual alignment per scene |
-| Python `wave` over ffmpeg for WAV concat | ffmpeg concat produces broken `LIST` chunk headers |
+| Concatenated scene MP3s over combined TTS | Guarantees perfect audio-visual alignment per scene |
+| ffmpeg concat demuxer for MP3 concat | MP3 format requires ffmpeg; previously WAV used Python wave module |
+| Edge TTS over VoxCPM | Free, no local model/GPU, reliable cloud service, native Chinese support |
 | Character-position timing cues | Approximate scene boundaries in narration text; now unused for timing |
 | Fixed scene structure (S1-S7) | Consistent video format across all projects |
 | Conditional S5/S6 scroll | Skip scroll when screenshot ≤1080px (fits screen) |
+| Demo image extraction from README | Visual demo output (detection results, screenshots) is more engaging than text; auto-fallback to README scroll when no images found |
+| S5 ken-burns carousel for demo images | Smooth zoom+pan animation makes static screenshots feel dynamic |
 | Weekly stars optional | Omitted from narration + display when `'?'` (unknown for custom URLs) |
 | GITHUB_TOKEN from env | Avoids 60/hr rate limit; reads from `GITHUB_TOKEN`, `GH_TOKEN`, or `~/.config/gh/hosts.yml` |
 
@@ -161,14 +166,14 @@ Total frames: `ceil(durationSeconds × 30) + 15` (15-frame tail padding).
 
 ## Dependencies
 
-### Python (voxcpm conda env)
-fastapi, uvicorn, websocket-client, voxcpm, soundfile, gradio_client, Pillow, numpy
+### Python (system)
+fastapi, uvicorn, websocket-client, edge-tts, Pillow, numpy
 
 ### npm (remotion/)
 remotion ^4.0.456, react ^18.3.1, typescript ^5.4.0
 
 ### System
-chromium-browser, ffmpeg, curl, conda
+chromium-browser, ffmpeg, curl
 
 ---
 
@@ -176,11 +181,9 @@ chromium-browser, ffmpeg, curl, conda
 
 | Path | Purpose |
 |------|---------|
-| `~/voxcpm/pretrained_models/VoxCPM2/` | VoxCPM model weights |
-| `/home/ppcorn/qwen3tts/hjf_test.wav` | Voice clone reference audio |
 | `~/.config/gh/hosts.yml` | GitHub CLI token auto-detect |
 | `translate.googleapis.com/translate_a/single` | Chinese translation (no auth) |
-| `openbmb/VoxCPM-Demo` | HuggingFace TTS fallback |
+| Edge TTS cloud service | Chinese narration (`zh-CN-YunxiNeural`, configurable via `EDGE_TTS_VOICE`) |
 | CDP port `9222`, Studio port `3000`, Dashboard port `8765` | Fixed ports |
 
 ---
@@ -199,6 +202,7 @@ chromium-browser, ffmpeg, curl, conda
   "author": "owner",
   "authorTitle": "owner - Developer",
   "features": [{"name": "/feature", "desc": "description", "icon": "🚀"}],
+  "demoImages": ["demo_owner-name_0.png", "demo_owner-name_1.png"],
   "narration": "full Chinese narration text",
   "narrationTiming": {"s2_project": 0.05, "s3_screenshot": 0.10, "s4_starzoom": 0.15, "s5_intro": 0.20, "s6_features": 0.60, "s7_outro": 0.95},
   "sceneTexts": {"s1": "text", "s2": "text", "...": "..."},
@@ -233,16 +237,15 @@ chromium-browser, ffmpeg, curl, conda
 - Verify Python syntax + `npx tsc --noEmit` before committing
 - Sync frontend JS `props` with backend API responses
 - Keep S1-S7 scene structure intact when changing timing
-- Use Python `wave` module for WAV concatenation
+- Use ffmpeg concat demuxer for MP3 concatenation
 
 **Ask first:**
 - Adding new npm or Python dependencies
 - Changing scene count or order (S1-S7)
-- Modifying VoxCPM model path or reference audio
+- Changing Edge TTS voice model
 - Changing Remotion resolution or FPS
 
 **Never do:**
 - Commit secrets, API tokens, credentials
-- Commit generated assets (WAV, MP4, PNG, trending.json)
-- Use ffmpeg for WAV concatenation (produces broken headers)
+- Commit generated assets (MP3, MP4, PNG, trending.json)
 - Edit `remotion/public/` assets directly (they're all generated)

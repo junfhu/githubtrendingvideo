@@ -640,6 +640,13 @@ function collectNarration() {
 
 function updateSceneText() {
   props.narration = collectNarration();
+  // Also rebuild sceneTexts from the edited textarea values
+  props.sceneTexts = {};
+  for (let i = 0; i < 7; i++) {
+    const el = document.getElementById('sceneText_' + i);
+    const key = 's' + (i + 1);
+    props.sceneTexts[key] = el ? el.value.trim() : '';
+  }
 }
 
 function updateFeature(i, field, value) {
@@ -689,10 +696,10 @@ async function takeScreenshot() {
 async function generateAudio() {
   const btn = document.getElementById('btnGenerate');
   btn.disabled = true; btn.textContent = 'Generating...';
-  setStatus('Generating voiceover via VoxCPM...', 'active');
+  setStatus('Generating voiceover via Edge TTS...', 'active');
   try {
     // Save current props (including edited narration and features)
-    props.narration = collectNarration();
+    updateSceneText();  // rebuilds both props.narration and props.sceneTexts from textareas
     await fetch('/api/save-props', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -729,7 +736,7 @@ async function previewRemotion() {
   setStatus('Preparing preview...', 'active');
 
   try {
-    props.narration = collectNarration();
+    updateSceneText();  // rebuilds both props.narration and props.sceneTexts from textareas
     await fetch('/api/save-props', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
@@ -802,7 +809,7 @@ async function buildVideo() {
   setStatus('Preparing build...', 'active');
 
   // Save edits
-  props.narration = collectNarration();
+  updateSceneText();  // rebuilds both props.narration and props.sceneTexts from textareas
   await fetch('/api/save-props', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},

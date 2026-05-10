@@ -1,7 +1,10 @@
 node_modules/
 *.mp4
 *.wav
+*.mp3
 remotion/public/screenshot_*.png
 remotion/public/narration_*.wav
+remotion/public/narration_*.mp3
+remotion/public/demo_*.png
 remotion/public/clean.png
 .DS_Store

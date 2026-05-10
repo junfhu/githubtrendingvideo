@@ -1,7 +1,39 @@
-import { Composition, getInputProps } from 'remotion';
+import { Composition, CalculateMetadataFunction } from 'remotion';
+import { z } from 'zod';
 import { MainComposition } from './MainComposition';
 
-const defaultProps = {
+const FeatureSchema = z.object({
+  name: z.string(),
+  desc: z.string(),
+  icon: z.string(),
+});
+
+export const VideoPropsSchema = z.object({
+  repo: z.string(),
+  name: z.string().optional(),
+  totalStars: z.string(),
+  weeklyStars: z.string(),
+  language: z.string(),
+  description: z.string(),
+  author: z.string(),
+  authorTitle: z.string(),
+  features: z.array(FeatureSchema),
+  screenshot: z.string(),
+  screenshotIntro: z.string().optional(),
+  screenshotIntroHeight: z.number().optional(),
+  s6Screenshot: z.string().optional(),
+  s6ScreenshotHeight: z.number().optional(),
+  s6Content: z.string().optional(),
+  demoImages: z.array(z.string()).optional(),
+  starScreenshot: z.string().optional(),
+  audio: z.string(),
+  narrationTiming: z.record(z.string(), z.number()).optional(),
+  sceneDurations: z.record(z.string(), z.number()).optional(),
+  sceneAudio: z.record(z.string(), z.string()).optional(),
+  durationSeconds: z.number(),
+});
+
+const defaultProps: z.infer<typeof VideoPropsSchema> = {
   repo: 'owner/repo',
   name: 'project',
   totalStars: '0',
@@ -18,30 +50,33 @@ const defaultProps = {
     { name: 'feature-5', desc: 'Share your video', icon: '🎯' },
     { name: 'feature-6', desc: 'Enjoy!', icon: '🛡️' },
   ],
-  narration: '请先在管理台选择一个项目。',
-  narrationTiming: {},
   screenshot: '',
   audio: '',
   durationSeconds: 30,
-  sceneDurations: {},
+};
+
+const calculateMetadata: CalculateMetadataFunction<
+  z.infer<typeof VideoPropsSchema>
+> = async ({ props }) => {
+  const durationInFrames = Math.ceil(props.durationSeconds * 30) + 15;
+  const shortName = (props.name || props.repo.split('/').pop() || 'video');
+  return {
+    durationInFrames,
+    defaultOutName: `${shortName}-promo`,
+  };
 };
 
 export const RemotionRoot = () => {
-  const props = getInputProps() as unknown as Record<string, unknown>;
-  const durationSec = (props.durationSeconds as number) || defaultProps.durationSeconds;
-  const durationInFrames = Math.ceil(durationSec * 30) + 15;
-
   return (
-    <>
-      <Composition
-        id="MainComposition"
-        component={MainComposition}
-        durationInFrames={durationInFrames}
-        fps={30}
-        width={1920}
-        height={1080}
-        defaultProps={defaultProps}
-      />
-    </>
+    <Composition
+      id="MainComposition"
+      component={MainComposition}
+      fps={30}
+      width={1920}
+      height={1080}
+      defaultProps={defaultProps}
+      schema={VideoPropsSchema}
+      calculateMetadata={calculateMetadata}
+    />
   );
 };

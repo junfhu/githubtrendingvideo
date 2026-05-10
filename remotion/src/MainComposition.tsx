@@ -1,6 +1,5 @@
 import {
   AbsoluteFill,
-  Audio,
   useCurrentFrame,
   useVideoConfig,
   spring,
@@ -9,13 +8,15 @@ import {
   staticFile,
   getInputProps,
 } from 'remotion';
+import { Audio } from '@remotion/media';
 import {
   useEnterAnimation,
   useExitAnimation,
 } from './Transitions';
-import type { EnterStyle, ExitStyle, PageTransition } from './Transitions';
+import type { EnterStyle, ExitStyle } from './Transitions';
+import { loadFont } from '@remotion/google-fonts/NotoSansSC';
 
-const FONT_FAMILY = '"Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif';
+const { fontFamily } = loadFont('normal', { weights: ['400', '700'], ignoreTooManyRequestsWarning: true });
 
 const COLORS = {
   bg: '#0d1117',
@@ -58,6 +59,7 @@ interface VideoProps {
   s6Screenshot?: string;
   s6ScreenshotHeight?: number;
   s6Content?: string;
+  demoImages?: string[];
   starScreenshot?: string;
   audio: string;
   narrationTiming?: Record<string, number>;
@@ -102,7 +104,6 @@ interface SceneDef {
   end: number;
   enter: EnterStyle;
   exit: ExitStyle;
-  nextTransition: PageTransition;
 }
 
 // Scene timing — calculated from narrationTiming in props
@@ -137,13 +138,13 @@ function buildScenes(totalFrames: number, _timing: Record<string, number> | unde
   const s7 = { start: t + 2,   end: T };
 
   return [
-    { name: 'intro_text',      start: s1.start, end: s1.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle, nextTransition: 'none' as PageTransition },
-    { name: 'intro_project',   start: s2.start, end: s2.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle, nextTransition: 'none' as PageTransition },
-    { name: 'screenshot',      start: s3.start, end: s3.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle, nextTransition: 'none' as PageTransition },
-    { name: 'star_detail',     start: s4.start, end: s4.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle, nextTransition: 'none' as PageTransition },
-    { name: 'intro_screenshot',start: s5.start, end: s5.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle, nextTransition: 'none' as PageTransition },
-    { name: 'features',        start: s6.start, end: s6.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle, nextTransition: 'none' as PageTransition },
-    { name: 'outro',           start: s7.start, end: s7.end, enter: 'fade' as EnterStyle, exit: 'none' as ExitStyle, nextTransition: 'none' as PageTransition },
+    { name: 'intro_text',      start: s1.start, end: s1.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle },
+    { name: 'intro_project',   start: s2.start, end: s2.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle },
+    { name: 'screenshot',      start: s3.start, end: s3.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle },
+    { name: 'star_detail',     start: s4.start, end: s4.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle },
+    { name: 'intro_screenshot',start: s5.start, end: s5.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle },
+    { name: 'features',        start: s6.start, end: s6.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle },
+    { name: 'outro',           start: s7.start, end: s7.end, enter: 'fade' as EnterStyle, exit: 'none' as ExitStyle },
   ];
 }
 
@@ -172,6 +173,8 @@ export const MainComposition = () => {
   const s6Height = props.s6ScreenshotHeight || 0;
   const s6FitsScreen = s6Height > 0 && s6Height <= 1080;
   const s6Content = props.s6Content || '';
+  const demoImages = (props.demoImages || []).filter(Boolean);
+  const hasDemoImages = demoImages.length > 0;
   const audioSrc = props.audio ? staticFile(props.audio) : '';
 
   // Build scenes from exact audio durations (7 concatenated files → one combined audio)
@@ -229,7 +232,7 @@ export const MainComposition = () => {
   const outroFade = interpolate(frame, [S[6].end - 30, S[6].end], [1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
 
   return (
-    <AbsoluteFill style={{ backgroundColor: COLORS.bg, fontFamily: FONT_FAMILY }}>
+    <AbsoluteFill style={{ backgroundColor: COLORS.bg, fontFamily: fontFamily }}>
       {audioSrc && <Audio src={audioSrc} volume={1} />}
       <AbsoluteFill style={{ opacity: outroFade }}>
         <GradientBg />
@@ -258,7 +261,7 @@ export const MainComposition = () => {
           }}>
             <div style={{
               color: '#ffffff', fontSize: 44, fontWeight: 600,
-              letterSpacing: '0.04em', fontFamily: FONT_FAMILY,
+              letterSpacing: '0.04em', fontFamily: fontFamily,
               textShadow: '0 2px 4px rgba(0,0,0,0.1)',
             }}>
               <TypewriterText
@@ -439,20 +442,107 @@ export const MainComposition = () => {
           </AbsoluteFill>
         )}
 
-        {/* ===== S5: INTRO SCREENSHOT — scroll only if taller than screen ===== */}
-        <AbsoluteFill style={{ ...sceneStyle(4), background: '#ffffff', overflow: 'hidden' }}>
-          {screenshotIntroSrc ? (
+        {/* ===== S5: DEMO IMAGES (when available) or INTRO SCREENSHOT ===== */}
+        <AbsoluteFill style={{ ...sceneStyle(4), background: '#0d1117', overflow: 'hidden' }}>
+          {hasDemoImages ? (
+            // Demo image carousel with ken-burns effect
+            (() => {
+              const s5Dur = S[4].end - S[4].start;
+              const imgCount = demoImages.length;
+              // Divide S5 duration across demo images
+              const framesPerImg = Math.max(30, Math.floor(s5Dur / imgCount));
+              const currentImgIdx = Math.min(
+                imgCount - 1,
+                Math.floor((frame - S[4].start) / framesPerImg)
+              );
+              const imgLocalFrame = (frame - S[4].start) - currentImgIdx * framesPerImg;
+              const imgProgress = imgLocalFrame / framesPerImg;
+
+              // Ken-burns: slow zoom + pan
+              const kbZoom = interpolate(imgProgress, [0, 1], [1.0, 1.08]);
+              const kbPanX = interpolate(imgProgress, [0, 1], [0, -20]);
+              const kbPanY = interpolate(imgProgress, [0, 1], [0, -10]);
+
+              // Cross-fade between images
+              const fadeFrames = 12;
+              const fadeIn = interpolate(imgLocalFrame, [0, fadeFrames], [0, 1], { extrapolateRight: 'clamp' });
+              const fadeOut = (imgIdx: number) => imgIdx < imgCount - 1
+                ? interpolate(imgLocalFrame, [framesPerImg - fadeFrames, framesPerImg], [1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' })
+                : 1;
+
+              return (
+                <AbsoluteFill style={{ background: '#0d1117' }}>
+                  {demoImages.map((imgName, idx) => {
+                    const isCurrent = idx === currentImgIdx;
+                    if (!isCurrent && idx !== currentImgIdx - 1) return null;
+                    const opacity = idx === currentImgIdx
+                      ? fadeIn * fadeOut(idx)
+                      : (idx === currentImgIdx - 1 ? interpolate(imgLocalFrame, [0, fadeFrames], [1, 0], { extrapolateRight: 'clamp' }) : 0);
+                    return (
+                      <div key={idx} style={{
+                        position: 'absolute', inset: 0,
+                        opacity: Math.max(0, opacity),
+                        display: 'flex', justifyContent: 'center', alignItems: 'center',
+                      }}>
+                        <div style={{
+                          transform: isCurrent ? `scale(${kbZoom}) translate(${kbPanX}px, ${kbPanY}px)` : 'none',
+                          transformOrigin: 'center center',
+                          width: '100%', height: '100%',
+                          display: 'flex', justifyContent: 'center', alignItems: 'center',
+                        }}>
+                          <Img src={staticFile(imgName)} style={{
+                            maxWidth: '100%', maxHeight: '100%',
+                            objectFit: 'contain',
+                            borderRadius: 8,
+                            boxShadow: '0 8px 40px rgba(0,0,0,0.5)',
+                          }} />
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {/* Image counter indicator */}
+                  <div style={{
+                    position: 'absolute', bottom: 60, left: '50%',
+                    transform: 'translateX(-50%)',
+                    display: 'flex', gap: 8, zIndex: 10,
+                  }}>
+                    {demoImages.map((_, idx) => (
+                      <div key={idx} style={{
+                        width: idx === currentImgIdx ? 24 : 8,
+                        height: 8,
+                        borderRadius: 4,
+                        background: idx === currentImgIdx ? '#58a6ff' : 'rgba(255,255,255,0.3)',
+                        transition: 'all 0.3s',
+                      }} />
+                    ))}
+                  </div>
+                  {/* "Demo Output" label */}
+                  <div style={{
+                    position: 'absolute', top: 40, left: 60, zIndex: 10,
+                    background: 'rgba(13,17,23,0.7)', borderRadius: 8,
+                    padding: '6px 16px', backdropFilter: 'blur(8px)',
+                    opacity: interpolate(frame, [S[4].start + 5, S[4].start + 18], [0, 1], { extrapolateRight: 'clamp' }),
+                  }}>
+                    <span style={{ color: '#58a6ff', fontSize: 14, fontWeight: 600, letterSpacing: 2 }}>
+                      DEMO OUTPUT
+                    </span>
+                  </div>
+                </AbsoluteFill>
+              );
+            })()
+          ) : screenshotIntroSrc ? (
+            // Original S5: README screenshot with scroll
             (() => {
               const sceneProgress = interpolate(
                 frame, [S[4].start, S[4].end], [0, 1],
                 { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
               );
               if (introFitsScreen) {
-                // Image fits on a single screen — display at natural size
                 return (
                   <div style={{
                     width: '100%', height: '100%', display: 'flex',
                     alignItems: 'center', justifyContent: 'center',
+                    background: '#ffffff',
                   }}>
                     <Img src={screenshotIntroSrc} style={{
                       width: '100%', height: 'auto', maxHeight: '100%',
@@ -461,7 +551,6 @@ export const MainComposition = () => {
                   </div>
                 );
               }
-              // Image is taller than screen — scroll to reveal full section
               const scrollY = interpolate(sceneProgress, [0, 0.1, 1], [0, 0, -65]);
               const zoom = interpolate(sceneProgress, [0, 0.12, 1], [1, 1.02, 1.06]);
               return (
@@ -469,7 +558,7 @@ export const MainComposition = () => {
                   width: '100%', height: '100%',
                   transform: `translateY(${scrollY}%) scale(${zoom})`,
                   transformOrigin: 'center top',
-                  transition: 'transform 0.1s linear',
+                  background: '#ffffff',
                 }}>
                   <Img src={screenshotIntroSrc} style={{
                     width: '100%', height: 'auto', minHeight: '100%',
@@ -482,7 +571,7 @@ export const MainComposition = () => {
               {description || 'Project introduction'}
             </div>
           )}
-          {!introFitsScreen && (
+          {!hasDemoImages && !introFitsScreen && screenshotIntroSrc && (
           <div style={{
             position: 'absolute', bottom: 0, left: 0, right: 0, height: 60,
             background: 'linear-gradient(transparent, rgba(255,255,255,0.85))',
@@ -494,14 +583,13 @@ export const MainComposition = () => {
         {/* ===== S6: FEATURES or HOW-IT-WORKS fallback ===== */}
         <AbsoluteFill style={{ ...sceneStyle(5), justifyContent: 'center', alignItems: 'center', background: '#ffffff', overflow: 'hidden' }}>
           {s6ScreenshotSrc ? (
-            // "How It Works" mode: screenshot with conditional scroll
+            // How-It-Works screenshot mode: screenshot with conditional scroll
             (() => {
               const sceneProgress = interpolate(
                 frame, [S[5].start, S[5].end], [0, 1],
                 { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
               );
               if (s6FitsScreen) {
-                // Image fits on a single screen — display at natural size
                 return (
                   <div style={{
                     width: '100%', height: '100%', display: 'flex',
@@ -528,8 +616,35 @@ export const MainComposition = () => {
                 </div>
               );
             })()
+          ) : s6Content ? (
+            // How-It-Works text mode: show installation/usage text in styled card
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', height: '100%', padding: '0 160px' }}>
+              <div style={{
+                background: '#ffffff', borderRadius: 16, padding: '48px 56px',
+                boxShadow: '0 8px 32px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04)',
+                maxWidth: 1400, width: '100%', maxHeight: '80%', overflow: 'hidden',
+                border: `1px solid ${COLORS.borderDark}`,
+              }}>
+                <div style={{ color: COLORS.blueDark, fontSize: 14, fontWeight: 600, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 16 }}>
+                  Quick Start Guide
+                </div>
+                <div style={{
+                  color: COLORS.headingDark, fontSize: 30, fontWeight: 700,
+                  marginBottom: 24, lineHeight: 1.4,
+                }}>
+                  {repo.split('/').pop()} — Getting Started
+                </div>
+                <div style={{
+                  color: COLORS.textDark, fontSize: 20, lineHeight: 1.8,
+                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  fontFamily,
+                }}>
+                  {s6Content}
+                </div>
+              </div>
+            </div>
           ) : (
-            // Feature cards mode (original)
+            // Feature cards mode
             <div style={{ display: 'flex', flexDirection: 'row', gap: 40, padding: '0 120px', width: '100%', height: '100%', alignItems: 'center' }}>
               <div style={{ flex: '0 0 55%', display: 'flex', flexDirection: 'column', gap: 12, zIndex: 1 }}>
                 <div style={{ color: COLORS.blueDark, fontSize: 16, fontWeight: 600, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 8 }}>Core Features</div>
@@ -596,7 +711,7 @@ export const MainComposition = () => {
             </div>
             <div style={{
               color: '#ffffff', fontSize: 42, fontWeight: 600,
-              letterSpacing: '0.04em', fontFamily: FONT_FAMILY,
+              letterSpacing: '0.04em', fontFamily: fontFamily,
               textShadow: '0 2px 4px rgba(0,0,0,0.1)', lineHeight: 1.4,
             }}>
               关注我，获得最新的<br/>实用项目信息
