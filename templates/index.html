@@ -282,13 +282,18 @@ audio { width: 100%; margin-top: 14px; border-radius: var(--radius-sm); }
         <div class="shot-label"><span class="dot-indicator intro"></span> Intro · README (S5)</div>
         <img class="screenshot-img" id="screenshotIntro" src="" alt="Intro" onerror="this.style.display='none'">
       </div>
-      <div class="shot-wrap" id="s6ShotWrap" style="display:none">
-        <div class="shot-label"><span class="dot-indicator intro" style="background:var(--green)"></span> How It Works (S6)</div>
-        <img class="screenshot-img" id="screenshotS6" src="" alt="S6" onerror="this.style.display='none'">
-      </div>
       <div id="noScreenshot" style="color:var(--text-muted);padding:30px;text-align:center;font-size:13px">No screenshots yet</div>
       <div style="margin-top:16px">
         <button class="btn btn-sm btn-gold" id="btnScreenshot" onclick="takeScreenshot()">Take Screenshots</button>
+      </div>
+      {/* Cover previews */}
+      <div id="coverPreviewMobile" style="display:none;margin-top:16px;text-align:center">
+        <div class="shot-label">📱 Mobile Cover (9:16)</div>
+        <img id="coverImgMobile" src="" style="width:100%;border-radius:8px;border:1px solid var(--border)" alt="Mobile Cover">
+      </div>
+      <div id="coverPreviewPC" style="display:none;margin-top:16px;text-align:center">
+        <div class="shot-label">🖥️ PC Cover (16:9)</div>
+        <img id="coverImgPC" src="" style="width:100%;border-radius:8px;border:1px solid var(--border)" alt="PC Cover">
       </div>
     </div>
 
@@ -306,6 +311,8 @@ audio { width: 100%; margin-top: 14px; border-radius: var(--radius-sm); }
         <button class="btn btn-primary" id="btnGenerate" onclick="generateAudio()">Generate Voice</button>
         <button class="btn" id="btnPreview" onclick="previewRemotion()">Preview</button>
         <button class="btn btn-success" id="btnBuild" onclick="buildVideo()">Build Video</button>
+        <button class="btn btn-gold btn-sm" id="btnCoverMobile" onclick="renderCover('mobile')">📱 Cover</button>
+        <button class="btn btn-gold btn-sm" id="btnCoverPC" onclick="renderCover('pc')">🖥️ Cover</button>
       </div>
       <audio id="audioPlayer" controls style="display:none;margin-top:12px"></audio>
     </div>
@@ -521,15 +528,6 @@ function renderEditor() {
   } else {
     document.getElementById('screenshotIntro').style.display = 'none';
   }
-  if (props.s6Screenshot) {
-    document.getElementById('screenshotS6').src = '/public/' + props.s6Screenshot;
-    document.getElementById('screenshotS6').style.display = 'block';
-    document.getElementById('s6ShotWrap').style.display = '';
-  } else {
-    document.getElementById('screenshotS6').style.display = 'none';
-    document.getElementById('s6ShotWrap').style.display = 'none';
-  }
-
   let meta = '';
   if (props.totalStars) meta += '<div class="meta-cell"><div class="m-label">Total Stars</div><div class="m-value gold">⭐ ' + esc(props.totalStars) + '</div></div>';
   if (props.weeklyStars && props.weeklyStars !== '?') meta += '<div class="meta-cell"><div class="m-label">This Week</div><div class="m-value">🔥 +' + esc(props.weeklyStars) + '</div></div>';
@@ -563,8 +561,8 @@ function renderEditor() {
 function getSceneTexts() {
   const narration = props.narration || '';
   const timing = props.narrationTiming || {};
-  // New cue names: s2_project, s3_screenshot, s4_starzoom, s5_intro, s6_features, s7_outro
-  const keys = ['s2_project', 's3_screenshot', 's4_starzoom', 's5_intro', 's6_features', 's7_outro'];
+  // New cue names: s2_project, s3_screenshot, s4_starzoom, s5_intro, s7_outro
+  const keys = ['s2_project', 's3_screenshot', 's4_starzoom', 's5_intro', 's7_outro'];
   const positions = keys.map(k => Math.floor((timing[k] || 0) * narration.length)).filter(p => p > 0);
 
   let prev = 0;
@@ -584,8 +582,7 @@ function getSceneTexts() {
     s3: stripPunct(parts[2]) || '',
     s4: stripPunct(parts[3]) || '',
     s5: stripPunct(parts[4]) || '',
-    s6: stripPunct(parts[5]) || '',
-    s7: stripPunct(parts[6]) || '关注我，获得最新的实用项目信息',
+    s6: stripPunct(parts[5]) || '关注我，获得最新的实用项目信息',
   };
 }
 
@@ -595,16 +592,15 @@ function renderSceneTimeline() {
   const timing = props.narrationTiming || {};
   const texts = getSceneTexts();
 
-  const sceneColors = ['#6366f1','#8b5cf6','#f0c040','#ef4444','#3b82f6','#22c55e','#6366f1'];
-  const sceneNames = ['Opening','Project Card','Screenshot','Star Zoom','Intro README','Features','Outro'];
+  const sceneColors = ['#6366f1','#8b5cf6','#f0c040','#ef4444','#3b82f6','#6366f1'];
+  const sceneNames = ['Opening','Project Card','Screenshot','Star Zoom','Project Intro','Outro'];
   const scenes = [
     { start:0, end:80, img:null, text:texts.s1 },
     { start:70, end:150, img:null, text:props.name||'project' },
     { start:135, end:280, img:props.screenshot, text:texts.s3 },
     { start:260, end:360, img:props.screenshot, text:texts.s4 },
-    { start:300, end:Math.floor(T*0.88), img:props.screenshotIntro, text:texts.s5 },
-    { start:Math.floor(T*0.86), end:Math.floor(T*0.95), img:props.screenshotIntro, text:texts.s6 },
-    { start:Math.floor(T*0.93), end:T, img:null, text:texts.s7 },
+    { start:300, end:Math.floor(T*0.90), img:props.screenshotIntro, text:texts.s5 },
+    { start:Math.floor(T*0.88), end:T, img:null, text:texts.s6 },
   ];
 
   let html = '';
@@ -630,8 +626,9 @@ function renderSceneTimeline() {
 
 function collectNarration() {
   // Collect all scene texts into one narration string
+  const sceneKeys = ['s1','s2','s3','s4','s5','s7'];
   const texts = [];
-  for (let i = 0; i < 7; i++) {
+  for (let i = 0; i < 6; i++) {
     const el = document.getElementById('sceneText_' + i);
     if (el && el.value.trim()) texts.push(el.value.trim());
   }
@@ -642,10 +639,10 @@ function updateSceneText() {
   props.narration = collectNarration();
   // Also rebuild sceneTexts from the edited textarea values
   props.sceneTexts = {};
-  for (let i = 0; i < 7; i++) {
+  const sceneKeys = ['s1','s2','s3','s4','s5','s7'];
+  for (let i = 0; i < 6; i++) {
     const el = document.getElementById('sceneText_' + i);
-    const key = 's' + (i + 1);
-    props.sceneTexts[key] = el ? el.value.trim() : '';
+    props.sceneTexts[sceneKeys[i]] = el ? el.value.trim() : '';
   }
 }
 
@@ -667,9 +664,7 @@ async function takeScreenshot() {
       body: JSON.stringify({
         repo: props.repo,
         heading: props.screenshotIntroHeading || '',
-        heading_index: props.screenshotIntroHeadingIndex || 0,
-        s6_heading: props.s6Heading || '',
-        s6_heading_index: props.s6HeadingIndex || 0
+        heading_index: props.screenshotIntroHeadingIndex || 0
       })
     });
     const data = await r.json();
@@ -677,7 +672,6 @@ async function takeScreenshot() {
       props.screenshot = data.top.split('/').pop();
       props.screenshotIntro = data.intro ? data.intro.split('/').pop() : null;
       props.screenshotIntroHeight = data.intro_height || null;
-      props.s6ScreenshotHeight = data.s6_height || null;
       document.getElementById('screenshotTop').src = data.top;
       document.getElementById('screenshotTop').style.display = 'block';
       if (data.intro) {
@@ -794,6 +788,47 @@ async function previewRemotion() {
     modal.classList.remove('show');
     setStatus('Remotion: ' + e.message, 'error');
   }
+}
+
+async function renderCover(type) {
+  const isMobile = type === 'mobile';
+  const btnId = isMobile ? 'btnCoverMobile' : 'btnCoverPC';
+  const endpoint = isMobile ? '/api/render-cover-mobile' : '/api/render-cover-pc';
+  const previewId = isMobile ? 'coverPreviewMobile' : 'coverPreviewPC';
+  const imgId = isMobile ? 'coverImgMobile' : 'coverImgPC';
+  const label = isMobile ? '📱 Cover' : '🖥️ Cover';
+
+  const btn = document.getElementById(btnId);
+  btn.disabled = true; btn.textContent = 'Rendering...';
+  setStatus(`Rendering ${isMobile ? 'mobile' : 'PC'} cover...`, 'active');
+
+  updateSceneText();
+  await fetch('/api/save-props', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({repo: props.repo, props: props})
+  });
+
+  try {
+    const r = await fetch(endpoint, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({repo: props.repo, props: props})
+    });
+    const data = await r.json();
+    if (data.success) {
+      setStatus(`Cover saved: ${data.path}`, 'success');
+      const preview = document.getElementById(previewId);
+      const img = document.getElementById(imgId);
+      if (preview && img) {
+        img.src = data.path;
+        preview.style.display = 'block';
+      }
+    } else {
+      setStatus('Cover render failed', 'error');
+    }
+  } catch(e) { setStatus(e.message, 'error'); }
+  btn.disabled = false; btn.textContent = label;
 }
 
 async function buildVideo() {

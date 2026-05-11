@@ -56,9 +56,6 @@ interface VideoProps {
   screenshot: string;
   screenshotIntro?: string;
   screenshotIntroHeight?: number;
-  s6Screenshot?: string;
-  s6ScreenshotHeight?: number;
-  s6Content?: string;
   demoImages?: string[];
   starScreenshot?: string;
   audio: string;
@@ -123,19 +120,17 @@ function buildScenes(totalFrames: number, _timing: Record<string, number> | unde
   const s2Frames = dur('s2', 30);
   const s3Frames = dur('s3', 70);
   const s4Frames = dur('s4', 60);
-  const s5Frames = dur('s5', 300);
-  const s6Frames = dur('s6', 200);
-  const s7Frames = dur('s7', 80);
+  const s5Frames = dur('s5', 500);
+  const s6Frames = dur('s7', 80);
 
-  // Cumulative start positions
+  // Cumulative start positions (S6 removed, S7→S6)
   let t = 0;
   const s1 = { start: t, end: t + s1Frames }; t += s1Frames;
   const s2 = { start: t - 10, end: t + s2Frames }; t += s2Frames;
   const s3 = { start: t - 10, end: t + s3Frames }; t += s3Frames;
   const s4 = { start: t - 10, end: t + s4Frames }; t += s4Frames;
   const s5 = { start: t - 10, end: t + s5Frames - 8 }; t += s5Frames;
-  const s6 = { start: t + 2,   end: t + s6Frames }; t += s6Frames;
-  const s7 = { start: t + 2,   end: T };
+  const s6 = { start: t + 2,   end: T };
 
   return [
     { name: 'intro_text',      start: s1.start, end: s1.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle },
@@ -143,8 +138,7 @@ function buildScenes(totalFrames: number, _timing: Record<string, number> | unde
     { name: 'screenshot',      start: s3.start, end: s3.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle },
     { name: 'star_detail',     start: s4.start, end: s4.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle },
     { name: 'intro_screenshot',start: s5.start, end: s5.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle },
-    { name: 'features',        start: s6.start, end: s6.end, enter: 'fade' as EnterStyle, exit: 'fade' as ExitStyle },
-    { name: 'outro',           start: s7.start, end: s7.end, enter: 'fade' as EnterStyle, exit: 'none' as ExitStyle },
+    { name: 'outro',           start: s6.start, end: s6.end, enter: 'fade' as EnterStyle, exit: 'none' as ExitStyle },
   ];
 }
 
@@ -169,10 +163,6 @@ export const MainComposition = () => {
   const screenshotIntroSrc = props.screenshotIntro ? staticFile(props.screenshotIntro) : '';
   const introHeight = props.screenshotIntroHeight || 0;
   const introFitsScreen = introHeight > 0 && introHeight <= 1080;
-  const s6ScreenshotSrc = props.s6Screenshot ? staticFile(props.s6Screenshot) : '';
-  const s6Height = props.s6ScreenshotHeight || 0;
-  const s6FitsScreen = s6Height > 0 && s6Height <= 1080;
-  const s6Content = props.s6Content || '';
   const demoImages = (props.demoImages || []).filter(Boolean);
   const hasDemoImages = demoImages.length > 0;
   const audioSrc = props.audio ? staticFile(props.audio) : '';
@@ -181,17 +171,16 @@ export const MainComposition = () => {
   SCENES = buildScenes(durationInFrames, props.narrationTiming, props.sceneDurations);
   const S = SCENES;
 
-  // --- Per-scene enter/exit animations (7 scenes) ---
+  // --- Per-scene enter/exit animations (6 scenes) ---
   const e0 = useEnterAnimation(S[0].enter, S[0].start); const x0 = useExitAnimation(S[0].exit, S[0].end - 15);
   const e1 = useEnterAnimation(S[1].enter, S[1].start); const x1 = useExitAnimation(S[1].exit, S[1].end - 15);
   const e2 = useEnterAnimation(S[2].enter, S[2].start); const x2 = useExitAnimation(S[2].exit, S[2].end - 15);
   const e3 = useEnterAnimation(S[3].enter, S[3].start); const x3 = useExitAnimation(S[3].exit, S[3].end - 15);
   const e4 = useEnterAnimation(S[4].enter, S[4].start); const x4 = useExitAnimation(S[4].exit, S[4].end - 15);
-  const e5 = useEnterAnimation(S[5].enter, S[5].start); const x5 = useExitAnimation(S[5].exit, S[5].end - 15);
-  const e6 = useEnterAnimation(S[6].enter, S[6].start);
+  const e5 = useEnterAnimation(S[5].enter, S[5].start);
 
-  const enterAnims = [e0, e1, e2, e3, e4, e5, e6];
-  const exitAnims = [x0, x1, x2, x3, x4, x5, { transform: 'none', opacity: 0 }];
+  const enterAnims = [e0, e1, e2, e3, e4, e5];
+  const exitAnims = [x0, x1, x2, x3, x4, { transform: 'none', opacity: 0 }];
 
   const isActive = (i: number) => frame >= S[i].start && frame <= S[i].end;
 
@@ -217,19 +206,8 @@ export const MainComposition = () => {
   const weeklyOpacity = interpolate(frame, [weeklyDelay, weeklyDelay + 12], [0, 1], { extrapolateRight: 'clamp', extrapolateLeft: 'clamp' });
   const weeklySlideIn = spring({ frame: frame - weeklyDelay, fps, config: { damping: 14, stiffness: 70 } });
 
-  // --- S6: Features — timing from exact audio duration ---
-  const s6Dur = S[5].end - S[5].start;
-  const featCount = Math.min(features.length, 6);
-  const featureFrames = Array.from({length: featCount}, (_, i) =>
-    Math.floor(s6Dur * 0.06 + i * (s6Dur * 0.84 / featCount))
-  );
-  let currentFeatureIdx = -1;
-  for (let i = 0; i < featureFrames.length; i++) {
-    if (frame >= S[5].start + featureFrames[i]) currentFeatureIdx = i;
-  }
-
-  // --- S6: Outro ---
-  const outroFade = interpolate(frame, [S[6].end - 30, S[6].end], [1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
+  // --- Outro fade ---
+  const outroFade = interpolate(frame, [S[5].end - 30, S[5].end], [1, 0], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
 
   return (
     <AbsoluteFill style={{ backgroundColor: COLORS.bg, fontFamily: fontFamily }}>
@@ -442,14 +420,13 @@ export const MainComposition = () => {
           </AbsoluteFill>
         )}
 
-        {/* ===== S5: DEMO IMAGES (when available) or INTRO SCREENSHOT ===== */}
+        {/* ===== S5: PROJECT INTRODUCTION + DEMO IMAGES ===== */}
         <AbsoluteFill style={{ ...sceneStyle(4), background: '#0d1117', overflow: 'hidden' }}>
           {hasDemoImages ? (
-            // Demo image carousel with ken-burns effect
+            // Demo image carousel with ken-burns effect + project description overlay
             (() => {
               const s5Dur = S[4].end - S[4].start;
               const imgCount = demoImages.length;
-              // Divide S5 duration across demo images
               const framesPerImg = Math.max(30, Math.floor(s5Dur / imgCount));
               const currentImgIdx = Math.min(
                 imgCount - 1,
@@ -458,12 +435,10 @@ export const MainComposition = () => {
               const imgLocalFrame = (frame - S[4].start) - currentImgIdx * framesPerImg;
               const imgProgress = imgLocalFrame / framesPerImg;
 
-              // Ken-burns: slow zoom + pan
               const kbZoom = interpolate(imgProgress, [0, 1], [1.0, 1.08]);
               const kbPanX = interpolate(imgProgress, [0, 1], [0, -20]);
               const kbPanY = interpolate(imgProgress, [0, 1], [0, -10]);
 
-              // Cross-fade between images
               const fadeFrames = 12;
               const fadeIn = interpolate(imgLocalFrame, [0, fadeFrames], [0, 1], { extrapolateRight: 'clamp' });
               const fadeOut = (imgIdx: number) => imgIdx < imgCount - 1
@@ -502,7 +477,7 @@ export const MainComposition = () => {
                   })}
                   {/* Image counter indicator */}
                   <div style={{
-                    position: 'absolute', bottom: 60, left: '50%',
+                    position: 'absolute', bottom: 140, left: '50%',
                     transform: 'translateX(-50%)',
                     display: 'flex', gap: 8, zIndex: 10,
                   }}>
@@ -516,187 +491,122 @@ export const MainComposition = () => {
                       }} />
                     ))}
                   </div>
-                  {/* "Demo Output" label */}
+                  {/* Project description card overlay */}
                   <div style={{
-                    position: 'absolute', top: 40, left: 60, zIndex: 10,
-                    background: 'rgba(13,17,23,0.7)', borderRadius: 8,
-                    padding: '6px 16px', backdropFilter: 'blur(8px)',
-                    opacity: interpolate(frame, [S[4].start + 5, S[4].start + 18], [0, 1], { extrapolateRight: 'clamp' }),
+                    position: 'absolute', bottom: 0, left: 0, right: 0,
+                    background: 'linear-gradient(transparent 0%, rgba(13,17,23,0.92) 30%)',
+                    padding: '60px 80px 40px',
+                    opacity: interpolate(frame, [S[4].start + 8, S[4].start + 25], [0, 1], { extrapolateRight: 'clamp' }),
                   }}>
-                    <span style={{ color: '#58a6ff', fontSize: 14, fontWeight: 600, letterSpacing: 2 }}>
-                      DEMO OUTPUT
-                    </span>
+                    <div style={{ color: '#58a6ff', fontSize: 13, fontWeight: 600, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 10 }}>
+                      Project Overview
+                    </div>
+                    <div style={{ color: '#f0f6fc', fontSize: 22, fontWeight: 700, lineHeight: 1.5, marginBottom: 10 }}>
+                      {displayName}
+                    </div>
+                    <div style={{ color: '#8b949e', fontSize: 16, lineHeight: 1.6, maxWidth: 1200 }}>
+                      {description || 'An open-source project on GitHub Trending.'}
+                    </div>
+                    <div style={{ display: 'flex', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
+                      {[language, 'GitHub Trending', 'Open Source'].filter(Boolean).map((tag) => (
+                        <span key={tag} style={{ padding: '3px 12px', borderRadius: 20, background: 'rgba(88,166,255,0.12)', color: '#58a6ff', fontSize: 12, fontWeight: 500 }}>{tag}</span>
+                      ))}
+                    </div>
                   </div>
                 </AbsoluteFill>
               );
             })()
           ) : screenshotIntroSrc ? (
-            // Original S5: README screenshot with scroll
+            // README screenshot with scroll + project description overlay
             (() => {
               const sceneProgress = interpolate(
                 frame, [S[4].start, S[4].end], [0, 1],
                 { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
               );
-              if (introFitsScreen) {
-                return (
-                  <div style={{
-                    width: '100%', height: '100%', display: 'flex',
-                    alignItems: 'center', justifyContent: 'center',
-                    background: '#ffffff',
-                  }}>
-                    <Img src={screenshotIntroSrc} style={{
-                      width: '100%', height: 'auto', maxHeight: '100%',
-                      objectFit: 'contain',
-                    }} />
-                  </div>
-                );
-              }
-              const scrollY = interpolate(sceneProgress, [0, 0.1, 1], [0, 0, -65]);
-              const zoom = interpolate(sceneProgress, [0, 0.12, 1], [1, 1.02, 1.06]);
               return (
-                <div style={{
-                  width: '100%', height: '100%',
-                  transform: `translateY(${scrollY}%) scale(${zoom})`,
-                  transformOrigin: 'center top',
-                  background: '#ffffff',
-                }}>
-                  <Img src={screenshotIntroSrc} style={{
-                    width: '100%', height: 'auto', minHeight: '100%',
-                  }} />
-                </div>
-              );
-            })()
-          ) : (
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', color: COLORS.mutedDark, fontSize: 20 }}>
-              {description || 'Project introduction'}
-            </div>
-          )}
-          {!hasDemoImages && !introFitsScreen && screenshotIntroSrc && (
-          <div style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0, height: 60,
-            background: 'linear-gradient(transparent, rgba(255,255,255,0.85))',
-            pointerEvents: 'none',
-          }} />
-          )}
-        </AbsoluteFill>
-
-        {/* ===== S6: FEATURES or HOW-IT-WORKS fallback ===== */}
-        <AbsoluteFill style={{ ...sceneStyle(5), justifyContent: 'center', alignItems: 'center', background: '#ffffff', overflow: 'hidden' }}>
-          {s6ScreenshotSrc ? (
-            // How-It-Works screenshot mode: screenshot with conditional scroll
-            (() => {
-              const sceneProgress = interpolate(
-                frame, [S[5].start, S[5].end], [0, 1],
-                { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' }
-              );
-              if (s6FitsScreen) {
-                return (
-                  <div style={{
-                    width: '100%', height: '100%', display: 'flex',
-                    alignItems: 'center', justifyContent: 'center',
-                  }}>
-                    <Img src={s6ScreenshotSrc} style={{
-                      width: '100%', height: 'auto', maxHeight: '100%',
-                      objectFit: 'contain',
-                    }} />
-                  </div>
-                );
-              }
-              const scrollY = interpolate(sceneProgress, [0, 0.1, 1], [0, 0, -55]);
-              const zoom = interpolate(sceneProgress, [0, 0.12, 1], [1, 1.02, 1.05]);
-              return (
-                <div style={{
-                  width: '100%', height: '100%',
-                  transform: `translateY(${scrollY}%) scale(${zoom})`,
-                  transformOrigin: 'center top',
-                }}>
-                  <Img src={s6ScreenshotSrc} style={{
-                    width: '100%', height: 'auto', minHeight: '100%',
-                  }} />
-                </div>
-              );
-            })()
-          ) : s6Content ? (
-            // How-It-Works text mode: show installation/usage text in styled card
-            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', height: '100%', padding: '0 160px' }}>
-              <div style={{
-                background: '#ffffff', borderRadius: 16, padding: '48px 56px',
-                boxShadow: '0 8px 32px rgba(0,0,0,0.08), 0 2px 8px rgba(0,0,0,0.04)',
-                maxWidth: 1400, width: '100%', maxHeight: '80%', overflow: 'hidden',
-                border: `1px solid ${COLORS.borderDark}`,
-              }}>
-                <div style={{ color: COLORS.blueDark, fontSize: 14, fontWeight: 600, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 16 }}>
-                  Quick Start Guide
-                </div>
-                <div style={{
-                  color: COLORS.headingDark, fontSize: 30, fontWeight: 700,
-                  marginBottom: 24, lineHeight: 1.4,
-                }}>
-                  {repo.split('/').pop()} — Getting Started
-                </div>
-                <div style={{
-                  color: COLORS.textDark, fontSize: 20, lineHeight: 1.8,
-                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                  fontFamily,
-                }}>
-                  {s6Content}
-                </div>
-              </div>
-            </div>
-          ) : (
-            // Feature cards mode
-            <div style={{ display: 'flex', flexDirection: 'row', gap: 40, padding: '0 120px', width: '100%', height: '100%', alignItems: 'center' }}>
-              <div style={{ flex: '0 0 55%', display: 'flex', flexDirection: 'column', gap: 12, zIndex: 1 }}>
-                <div style={{ color: COLORS.blueDark, fontSize: 16, fontWeight: 600, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 8 }}>Core Features</div>
-                {features.map((feat, i) => {
-                  const isActive = i === currentFeatureIdx;
-                  const isPast = i < currentFeatureIdx;
-                  const cardOpacity = isActive ? 1 : isPast ? 0.5 : 0.3;
-                  const isEntering = isActive
-                    ? spring({ frame: frame - S[5].start - featureFrames[i], fps, config: { damping: 12, stiffness: 80 } })
-                    : 1;
-                  return (
-                    <div key={i} style={{
-                      display: 'flex', alignItems: 'center', gap: 16,
-                      padding: '14px 24px', borderRadius: 10,
-                      background: isActive ? `rgba(9,105,218,0.06)` : 'rgba(255,255,255,0.7)',
-                      border: `1px solid ${isActive ? COLORS.blueDark : COLORS.borderDark}`,
-                      borderLeft: `4px solid ${isActive ? COLORS.blueDark : COLORS.borderDark}`,
-                      opacity: cardOpacity,
-                      transform: `translateX(${interpolate(isEntering, [0, 1], [60, 0])}px) scale(${isActive ? 1.03 : 1})`,
-                      backdropFilter: 'blur(4px)',
+                <AbsoluteFill style={{ background: '#0d1117' }}>
+                  {introFitsScreen ? (
+                    <div style={{
+                      width: '100%', height: '100%', display: 'flex',
+                      alignItems: 'center', justifyContent: 'center',
+                      background: '#ffffff',
                     }}>
-                      <span style={{ fontSize: 28, flexShrink: 0 }}>{feat.icon}</span>
-                      <div>
-                        <div style={{ color: COLORS.headingDark, fontSize: 20, fontWeight: 700, fontFamily: 'monospace' }}>{feat.name}</div>
-                        <div style={{ color: COLORS.mutedDark, fontSize: 14, marginTop: 2 }}>{feat.desc}</div>
-                      </div>
+                      <Img src={screenshotIntroSrc} style={{
+                        width: '100%', height: 'auto', maxHeight: '100%',
+                        objectFit: 'contain',
+                      }} />
                     </div>
-                  );
-                })}
-              </div>
-              <div style={{ flex: '0 0 35%', background: COLORS.cardDark, borderRadius: 16, padding: 32, border: `1px solid ${COLORS.borderDark}`, boxShadow: '0 4px 16px rgba(0,0,0,0.08)', zIndex: 1 }}>
-                <div style={{ color: COLORS.mutedDark, fontSize: 12, letterSpacing: 2, textTransform: 'uppercase', marginBottom: 8 }}>About This Project</div>
-                <div style={{ color: COLORS.headingDark, fontSize: 22, fontWeight: 700, marginBottom: 16, lineHeight: 1.4 }}>{description}</div>
-                <div style={{ color: COLORS.textDark, fontSize: 15, lineHeight: 1.6 }}>{language !== 'Unknown' ? `Built with ${language} and designed for professional workflows.` : ''} Star the repo to stay updated with new features and releases.</div>
-                <div style={{ marginTop: 20, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-                  {[language, 'GitHub Trending', 'Open Source', 'DevTools'].slice(0, 4).map((tag) => (
-                    <span key={tag} style={{ padding: '4px 12px', borderRadius: 20, background: 'rgba(9,105,218,0.08)', color: COLORS.blueDark, fontSize: 12, fontWeight: 500 }}>{tag}</span>
+                  ) : (
+                    <div style={{
+                      width: '100%', height: '100%',
+                      transform: `translateY(${interpolate(sceneProgress, [0, 0.1, 1], [0, 0, -65])}%) scale(${interpolate(sceneProgress, [0, 0.12, 1], [1, 1.02, 1.06])})`,
+                      transformOrigin: 'center top',
+                      background: '#ffffff',
+                    }}>
+                      <Img src={screenshotIntroSrc} style={{
+                        width: '100%', height: 'auto', minHeight: '100%',
+                      }} />
+                    </div>
+                  )}
+                  {/* Project description overlay */}
+                  <div style={{
+                    position: 'absolute', bottom: 0, left: 0, right: 0,
+                    background: 'linear-gradient(transparent 0%, rgba(13,17,23,0.92) 30%)',
+                    padding: '60px 80px 40px',
+                    opacity: interpolate(frame, [S[4].start + 8, S[4].start + 25], [0, 1], { extrapolateRight: 'clamp' }),
+                  }}>
+                    <div style={{ color: '#58a6ff', fontSize: 13, fontWeight: 600, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 10 }}>
+                      Project Overview
+                    </div>
+                    <div style={{ color: '#f0f6fc', fontSize: 22, fontWeight: 700, lineHeight: 1.5, marginBottom: 10 }}>
+                      What {displayName} Can Do
+                    </div>
+                    <div style={{ color: '#8b949e', fontSize: 16, lineHeight: 1.6, maxWidth: 1200 }}>
+                      {description || 'A powerful open-source tool built for developers.'}
+                    </div>
+                    <div style={{ display: 'flex', gap: 12, marginTop: 14, flexWrap: 'wrap' }}>
+                      {[language, 'GitHub Trending', 'Open Source'].filter(Boolean).map((tag) => (
+                        <span key={tag} style={{ padding: '3px 12px', borderRadius: 20, background: 'rgba(88,166,255,0.12)', color: '#58a6ff', fontSize: 12, fontWeight: 500 }}>{tag}</span>
+                      ))}
+                    </div>
+                  </div>
+                </AbsoluteFill>
+              );
+            })()
+          ) : (
+            // Fallback: project description card
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%', padding: '0 160px' }}>
+              <div style={{
+                background: 'linear-gradient(135deg, #161b22 0%, #0d1117 100%)',
+                borderRadius: 20, padding: '56px 64px',
+                border: '1px solid #30363d',
+                boxShadow: '0 12px 48px rgba(0,0,0,0.4)',
+                maxWidth: 1200, width: '100%', textAlign: 'center',
+                opacity: interpolate(frame, [S[4].start + 3, S[4].start + 20], [0, 1], { extrapolateRight: 'clamp' }),
+                transform: `translateY(${interpolate(spring({ frame: frame - S[4].start, fps, config: { damping: 12, stiffness: 70 } }), [0, 1], [40, 0])}px)`,
+              }}>
+                <div style={{ color: '#58a6ff', fontSize: 14, fontWeight: 600, letterSpacing: 3, textTransform: 'uppercase', marginBottom: 16 }}>
+                  What This Project Can Do
+                </div>
+                <div style={{ color: '#f0f6fc', fontSize: 36, fontWeight: 700, marginBottom: 16 }}>
+                  {displayName}
+                </div>
+                <div style={{ color: '#8b949e', fontSize: 20, lineHeight: 1.7, maxWidth: 900, margin: '0 auto' }}>
+                  {description || `An innovative ${language} project — check it out on GitHub to learn more.`}
+                </div>
+                <div style={{ display: 'flex', gap: 14, justifyContent: 'center', marginTop: 24, flexWrap: 'wrap' }}>
+                  {[language, 'Open Source', 'GitHub Trending'].filter(Boolean).map((tag) => (
+                    <span key={tag} style={{ padding: '6px 18px', borderRadius: 24, background: 'rgba(88,166,255,0.1)', color: '#58a6ff', fontSize: 14, fontWeight: 500, border: '1px solid rgba(88,166,255,0.2)' }}>{tag}</span>
                   ))}
                 </div>
               </div>
             </div>
           )}
-          <div style={{
-            position: 'absolute', bottom: 0, left: 0, right: 0, height: 60,
-            background: 'linear-gradient(transparent, rgba(255,255,255,0.85))',
-            pointerEvents: 'none',
-          }} />
         </AbsoluteFill>
 
-        {/* ===== S7: OUTRO — modern frontend aesthetic ===== */}
+        {/* ===== S6: OUTRO — modern frontend aesthetic ===== */}
         <AbsoluteFill style={{
-          ...sceneStyle(6), justifyContent: 'center', alignItems: 'center',
+          ...sceneStyle(5), justifyContent: 'center', alignItems: 'center',
           background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
         }}>
           <div style={{

@@ -331,6 +331,7 @@ import uvicorn
 
 app = FastAPI(title="Video Production Dashboard")
 app.mount("/public", StaticFiles(directory=PUBLIC_DIR), name="public")
+app.mount("/output", StaticFiles(directory=OUTPUT_DIR), name="output")
 
 render_status = {"running": False, "progress": "", "output": None}
 is_fetching = False
@@ -482,9 +483,6 @@ def select_project(data: dict):
     chinese_desc = ""
     intro_heading = ""
     intro_heading_index = 0
-    s6_content = ""
-    s6_heading = ""
-    s6_heading_index = 0
     features = [
         {"name": "/feature-1", "desc": "Core capability", "icon": "🚀"},
         {"name": "/feature-2", "desc": "Key functionality", "icon": "⚡"},
@@ -499,16 +497,6 @@ def select_project(data: dict):
         import base64
         readme_text = base64.b64decode(readme_info.get("content", "")).decode("utf-8", errors="replace")
         features = extract_features(readme_text)
-
-        # S6 fallback: if features lack substance, extract "How It Works" instead
-        substantial = [f for f in features if len(f.get("desc", "")) > 15]
-        if len(substantial) < 3:
-            s6_data = extract_how_it_works(readme_text)
-            if s6_data.get("text"):
-                s6_content = s6_data["text"]
-                s6_heading = s6_data["heading"]
-                s6_heading_index = s6_data["heading_index"]
-                print(f"S6 using How-It-Works: heading={s6_heading}, index={s6_heading_index}")
 
         desc_data = extract_chinese_description(readme_text, description, topics)
         chinese_desc = desc_data.get("text", "") if isinstance(desc_data, dict) else desc_data
@@ -531,7 +519,7 @@ def select_project(data: dict):
     # Generate narration with timing cues
     weekly_stars = data.get("stars_weekly", "?")
     weekly_stars_clean = weekly_stars if weekly_stars and weekly_stars not in ('?', '0') else ''
-    narration, timing, scene_texts = generate_narration(name, weekly_stars_clean, total_stars, language, chinese_desc or description, features, s6_content)
+    narration, timing, scene_texts = generate_narration(name, weekly_stars_clean, total_stars, language, chinese_desc or description, features)
 
     props = {
         "repo": repo,
@@ -550,10 +538,6 @@ def select_project(data: dict):
         "screenshot": "",
         "screenshotIntroHeading": intro_heading,
         "screenshotIntroHeadingIndex": intro_heading_index,
-        "s6Content": s6_content,
-        "s6Heading": s6_heading,
-        "s6HeadingIndex": s6_heading_index,
-        "s6Screenshot": "",
         "demoImages": demo_images if demo_images else [],
         "audio": "",
         "durationSeconds": max(15, len(narration) * 0.25),
@@ -630,8 +614,6 @@ def take_screenshot(data: dict):
     # Get the target heading from props for a focused intro screenshot
     target_heading = data.get("heading", "")
     target_heading_index = data.get("heading_index", 0)
-    s6_heading = data.get("s6_heading", "")
-    s6_heading_index = data.get("s6_heading_index", 0)
     if not target_heading:
         props_file = os.path.join(REMOTION_DIR, "props.json")
         if os.path.exists(props_file):
@@ -639,27 +621,19 @@ def take_screenshot(data: dict):
                 existing = json.load(f)
             target_heading = existing.get("screenshotIntroHeading", "")
             target_heading_index = existing.get("screenshotIntroHeadingIndex", 0)
-            s6_heading = existing.get("s6Heading", "")
-            s6_heading_index = existing.get("s6HeadingIndex", 0)
 
     cmd = [sys.executable, script, url, base_name]
     if target_heading:
         cmd.extend(["--heading", target_heading])
     if target_heading_index:
         cmd.extend(["--heading-index", str(target_heading_index)])
-    if s6_heading:
-        cmd.extend(["--s6-heading", s6_heading])
-    if s6_heading_index:
-        cmd.extend(["--s6-heading-index", str(s6_heading_index)])
 
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
 
         top_name = None
         intro_name = None
-        s6_name = None
         intro_height = None
-        s6_height = None
         star_pos = None
         for line in result.stdout.split("\n") + result.stderr.split("\n"):
             if line.startswith("TOP:"):
@@ -671,13 +645,6 @@ def take_screenshot(data: dict):
                     intro_height = int(line.split("INTRO_H:", 1)[1].strip())
                 except Exception:
                     pass
-            elif line.startswith("S6_H:"):
-                try:
-                    s6_height = int(line.split("S6_H:", 1)[1].strip())
-                except Exception:
-                    pass
-            elif line.startswith("S6:"):
-                s6_name = line.split("S6:", 1)[1].strip()
             elif "STAR_POS:" in line:
                 try:
                     star_pos = json.loads(line.split("STAR_POS:", 1)[1].strip())
@@ -692,12 +659,8 @@ def take_screenshot(data: dict):
                 props["screenshot"] = top_name
                 if intro_name:
                     props["screenshotIntro"] = intro_name
-                if s6_name:
-                    props["s6Screenshot"] = s6_name
                 if intro_height:
                     props["screenshotIntroHeight"] = intro_height
-                if s6_height:
-                    props["s6ScreenshotHeight"] = s6_height
                 with open(props_file, "w", encoding="utf-8") as f:
                     json.dump(props, f, ensure_ascii=False, indent=2)
 
@@ -788,14 +751,14 @@ def generate_audio(data: dict):
 
     # Use exact per-scene audio durations — discard combined file, concatenate scenes instead.
     # This guarantees each scene visual aligns perfectly with its audio.
-    for s in ['s1', 's2', 's3', 's4', 's5', 's6', 's7']:
+    for s in ['s1', 's2', 's3', 's4', 's5', 's7']:
         if s not in durations:
             durations[s] = 2.0
 
-    total_dur = sum(durations[s] for s in ['s1', 's2', 's3', 's4', 's5', 's6', 's7'])
+    total_dur = sum(durations[s] for s in ['s1', 's2', 's3', 's4', 's5', 's7'])
     # Concatenate per-scene MP3s using ffmpeg (MP3 concat requires ffmpeg, not Python wave module)
     combined_path = os.path.join(PUBLIC_DIR, combined_name)
-    scene_order = ['s1', 's2', 's3', 's4', 's5', 's6', 's7']
+    scene_order = ['s1', 's2', 's3', 's4', 's5', 's7']
     mp3_files = []
     for s in scene_order:
         mp3_path = os.path.join(PUBLIC_DIR, f"narration_{safe_name}_{s}.mp3")
@@ -855,6 +818,71 @@ def remotion_start():
 
 
 # ── API: Build video ───────────────────────────────────────────────────────
+
+def _render_cover_still(composition_id: str, output_name: str, repo: str, props_data: dict):
+    """Shared helper to render a Remotion Still cover."""
+    props_file = os.path.join(REMOTION_DIR, "props.json")
+    if not props_data:
+        if os.path.exists(props_file):
+            with open(props_file, "r", encoding="utf-8") as f:
+                props_data = json.load(f)
+
+    cover_props = {
+        "repo": props_data.get("repo", repo),
+        "name": props_data.get("name", ""),
+        "totalStars": props_data.get("totalStars", "0"),
+        "weeklyStars": props_data.get("weeklyStars", ""),
+        "language": props_data.get("language", ""),
+        "description": props_data.get("description", ""),
+        "screenshot": props_data.get("screenshot", ""),
+    }
+
+    with open(props_file, "w", encoding="utf-8") as f:
+        json.dump(cover_props, f, ensure_ascii=False)
+
+    output_path = os.path.join(OUTPUT_DIR, output_name)
+    cmd = [
+        "npx", "remotion", "still", "src/index.ts", composition_id, output_path,
+        "--props", json.dumps(cover_props),
+    ]
+    result = subprocess.run(cmd, cwd=REMOTION_DIR, capture_output=True, text=True, timeout=120)
+
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr[:500])
+    return f"/output/{output_name}"
+
+
+@app.post("/api/render-cover-mobile")
+def render_cover_mobile(data: dict):
+    """Render Douyin mobile cover (1080x1920, 9:16 portrait)."""
+    repo = data.get("repo", "repo")
+    safe_name = repo.replace("/", "-")
+    try:
+        path = _render_cover_still("CoverMobile", f"{safe_name}-cover-mobile.png", repo, data.get("props", {}))
+        return {"success": True, "path": path}
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+    except FileNotFoundError:
+        raise HTTPException(500, "npx not found. Install Node.js.")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(500, "Cover render timed out (120s)")
+
+
+@app.post("/api/render-cover-pc")
+def render_cover_pc(data: dict):
+    """Render PC landscape cover (1920x1080, 16:9)."""
+    repo = data.get("repo", "repo")
+    safe_name = repo.replace("/", "-")
+    try:
+        path = _render_cover_still("CoverPC", f"{safe_name}-cover-pc.png", repo, data.get("props", {}))
+        return {"success": True, "path": path}
+    except RuntimeError as e:
+        raise HTTPException(500, str(e))
+    except FileNotFoundError:
+        raise HTTPException(500, "npx not found. Install Node.js.")
+    except subprocess.TimeoutExpired:
+        raise HTTPException(500, "Cover render timed out (120s)")
+
 
 @app.post("/api/build-video")
 def build_video(data: dict):
@@ -1361,7 +1389,7 @@ def extract_features(readme_text):
 
 
 def extract_how_it_works(readme_text):
-    """Extract 'How It Works' / workflow section for S6 fallback.
+    """Extract 'How It Works' / workflow section from README.
 
     Returns: {"text": str, "heading": str, "heading_index": int}
     Searches for: How It Works, Architecture, Workflow, 工作原理, 怎么用 etc.
@@ -1420,7 +1448,7 @@ def extract_how_it_works(readme_text):
     }
 
 
-def generate_narration(name, weekly_stars, total_stars, language, description, features, s6_text=""):
+def generate_narration(name, weekly_stars, total_stars, language, description, features):
     # Build narration with per-scene timing cues
     parts = []
     cues = {}
@@ -1476,26 +1504,7 @@ def generate_narration(name, weekly_stars, total_stars, language, description, f
             cut = desc_clean.rfind("。", 0, 300)
             desc_clean = desc_clean[:cut + 1] if cut > 80 else desc_clean[:300]
         parts.append(desc_clean + "。")
-    cues["s6_features"] = len("".join(parts))  # S5→S6
-
-    # S6: Features — or "How It Works" fallback
-    if s6_text:
-        parts.append(s6_text.rstrip("。；") + "。")
-    elif features:
-        feat_parts = ["核心功能包括："]
-        for i, f in enumerate(features[:5]):
-            fname = f["name"].strip("/")
-            fdesc = f.get("desc", "")[:80]
-            # Translate English descriptions to Chinese
-            if fdesc and not any('一' <= c <= '鿿' for c in fdesc):
-                fdesc = translate_to_chinese(fdesc)
-            if fdesc and fname not in fdesc:
-                feat_parts.append(f"{fname}，{fdesc}；")
-            else:
-                feat_parts.append(f"{fname}；")
-        feat_text = "".join(feat_parts).rstrip("；") + "。"
-        parts.append(feat_text)
-    cues["s7_outro"] = len("".join(parts))  # S6→S7
+    cues["s7_outro"] = len("".join(parts))  # S5→S7
 
     # S7: Outro (fixed)
     p7 = "关注我，获得最新的实用项目信息。"
@@ -1510,10 +1519,10 @@ def generate_narration(name, weekly_stars, total_stars, language, description, f
         timing[scene] = round(pos / total_chars, 3) if total_chars > 0 else 0
 
     # Extract 7 scene texts for per-scene audio generation
-    cue_keys = ['s2_project', 's3_screenshot', 's4_starzoom', 's5_intro', 's6_features', 's7_outro']
+    cue_keys = ['s2_project', 's3_screenshot', 's4_starzoom', 's5_intro', 's7_outro']
     scene_texts = {}
     prev = 0
-    labels = ['s1', 's2', 's3', 's4', 's5', 's6', 's7']
+    labels = ['s1', 's2', 's3', 's4', 's5', 's7']
     idx = 0
     for key in cue_keys:
         pos = cues.get(key, len(narr))

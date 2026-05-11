@@ -1,6 +1,8 @@
-import { Composition, CalculateMetadataFunction } from 'remotion';
+import { Composition, Still, CalculateMetadataFunction } from 'remotion';
 import { z } from 'zod';
 import { MainComposition } from './MainComposition';
+import { CoverMobile } from './CoverMobile';
+import { CoverPC } from './CoverPC';
 
 const FeatureSchema = z.object({
   name: z.string(),
@@ -21,9 +23,6 @@ export const VideoPropsSchema = z.object({
   screenshot: z.string(),
   screenshotIntro: z.string().optional(),
   screenshotIntroHeight: z.number().optional(),
-  s6Screenshot: z.string().optional(),
-  s6ScreenshotHeight: z.number().optional(),
-  s6Content: z.string().optional(),
   demoImages: z.array(z.string()).optional(),
   starScreenshot: z.string().optional(),
   audio: z.string(),
@@ -66,17 +65,57 @@ const calculateMetadata: CalculateMetadataFunction<
   };
 };
 
+export const CoverPropsSchema = z.object({
+  repo: z.string(),
+  name: z.string().optional(),
+  totalStars: z.string(),
+  weeklyStars: z.string(),
+  language: z.string(),
+  description: z.string(),
+  screenshot: z.string().optional(),
+});
+
 export const RemotionRoot = () => {
   return (
-    <Composition
-      id="MainComposition"
-      component={MainComposition}
-      fps={30}
-      width={1920}
-      height={1080}
-      defaultProps={defaultProps}
-      schema={VideoPropsSchema}
-      calculateMetadata={calculateMetadata}
-    />
+    <>
+      <Composition
+        id="MainComposition"
+        component={MainComposition}
+        fps={30}
+        width={1920}
+        height={1080}
+        defaultProps={defaultProps}
+        schema={VideoPropsSchema}
+        calculateMetadata={calculateMetadata}
+      />
+      <Still
+        id="CoverMobile"
+        component={CoverMobile}
+        width={1080}
+        height={1440}
+        defaultProps={{
+          repo: 'owner/repo',
+          totalStars: '0',
+          weeklyStars: '0',
+          language: 'TypeScript',
+          description: 'Select a project in the dashboard',
+        }}
+        schema={CoverPropsSchema}
+      />
+      <Still
+        id="CoverPC"
+        component={CoverPC}
+        width={1440}
+        height={1080}
+        defaultProps={{
+          repo: 'owner/repo',
+          totalStars: '0',
+          weeklyStars: '0',
+          language: 'TypeScript',
+          description: 'Select a project in the dashboard',
+        }}
+        schema={CoverPropsSchema}
+      />
+    </>
   );
 };

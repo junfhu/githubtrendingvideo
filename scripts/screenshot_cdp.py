@@ -1,7 +1,7 @@
 """Take 2 viewport-height screenshots of a GitHub repo page via CDP.
 
-Shot 1 (top):    page header + star button area
-Shot 2 (intro):  README / introduction section below the fold
+Shot 1 (top):   page header + star button area
+Shot 2 (intro): README / introduction section below the fold
 """
 import json, base64, time, sys, os, re
 from websocket import create_connection
@@ -15,12 +15,10 @@ SKILL_DIR = os.path.dirname(SCRIPT_DIR)
 OUTPUT_DIR = os.path.join(SKILL_DIR, "remotion", "public")
 
 
-def cdp_screenshots(url, base_name, heading=None, heading_index=0,
-                    s6_heading=None, s6_heading_index=0):
-    """Take screenshots: top area, intro/README section, and optional S6 section.
+def cdp_screenshots(url, base_name, heading=None, heading_index=0):
+    """Take screenshots: top area and intro/README section.
 
     heading/heading_index: target the S5 intro section.
-    s6_heading/s6_heading_index: optional target for S6 "How It Works" section.
     """
     tabs = json.loads(urllib.request.urlopen(f"http://localhost:{DEBUG_PORT}/json").read())
     tab = next((t for t in tabs if t['type'] == 'page'), tabs[0])
@@ -312,132 +310,6 @@ def cdp_screenshots(url, base_name, heading=None, heading_index=0,
     except Exception as e:
         print(f"Screenshot 2 saved: {intro_path} ({file_size:,} bytes) — content check skipped: {e}")
 
-    # ── Optional S6 screenshot: "How It Works" section ─────────────────
-    s6_name = None
-    s6_viewport_h = 0
-    if s6_heading:
-        s6_search = re.sub(r'[#*_`]', '', s6_heading).strip()
-        print(f"S6 targeting heading: {s6_search} (index={s6_heading_index})")
-
-        # Reset viewport to normal first, re-navigate scroll position
-        send('Emulation.setDeviceMetricsOverride', {
-            'width': VIEWPORT_W, 'height': VIEWPORT_H,
-            'deviceScaleFactor': 1, 'mobile': False
-        })
-        time.sleep(0.4)
-
-        # Measure S6 section (same approach as intro)
-        s6_dims = send('Runtime.evaluate', {'expression': f'''
-        (function() {{
-            var container = document.querySelector('article.markdown-body')
-                         || document.querySelector('#readme')
-                         || document.querySelector('.markdown-body')
-                         || document.querySelector('[data-target="readme-toc"]')
-                         || document.querySelector('.Box-body')
-                         || document.querySelector('main');
-            if (!container) return JSON.stringify({{pageX: 0, pageY: 600, w: 900, h: 3000}});
-
-            var searchText = {json.dumps(s6_search)};
-            var headingIdx = {s6_heading_index};
-            var allH2s = container.querySelectorAll('h2');
-            var targetEl = null;
-
-            for (var i = 0; i < allH2s.length; i++) {{
-                var hText = allH2s[i].textContent.replace(/[#*_`\\s]+/g, ' ').trim().toLowerCase();
-                if (hText.indexOf(searchText.toLowerCase()) !== -1) {{
-                    targetEl = allH2s[i]; break;
-                }}
-            }}
-            if (!targetEl && headingIdx > 0 && headingIdx <= allH2s.length) {{
-                targetEl = allH2s[headingIdx - 1];
-            }}
-            if (!targetEl) targetEl = allH2s[0] || container;
-
-            var rect = targetEl.getBoundingClientRect();
-            window.scrollTo(0, window.scrollY + rect.top - 20);
-            rect = targetEl.getBoundingClientRect();
-
-            var endY = container.getBoundingClientRect().bottom + window.scrollY;
-            for (var k = 0; k < allH2s.length; k++) {{
-                if (allH2s[k].compareDocumentPosition(targetEl) & Node.DOCUMENT_POSITION_FOLLOWING) {{
-                    if (allH2s[k] !== targetEl) {{
-                        var nr = allH2s[k].getBoundingClientRect();
-                        endY = window.scrollY + nr.top; break;
-                    }}
-                }}
-            }}
-
-            var sectionTop = window.scrollY + rect.top;
-            var sectionH = Math.min(Math.max(endY - sectionTop, 400), 6000);
-
-            return JSON.stringify({{
-                pageX: Math.round(window.scrollX + rect.left),
-                pageY: Math.round(sectionTop),
-                w: Math.round(rect.width),
-                h: Math.round(sectionH)
-            }});
-        }})()
-        '''})
-
-        try:
-            s6_info = json.loads(s6_dims['result']['result']['value'])
-            s6_px = int(s6_info['pageX'])
-            s6_py = int(s6_info['pageY'])
-            s6_pw = int(s6_info['w'])
-            s6_ph = int(s6_info['h'])
-            print(f"S6 section page coords: x={s6_px}, y={s6_py}, w={s6_pw}, h={s6_ph}")
-        except Exception as e:
-            print(f"S6 measure failed: {e}")
-            s6_px, s6_py, s6_pw, s6_ph = 378, 2496, 838, 2000
-
-        if s6_pw > 0 and s6_ph > 0:
-            s6_viewport_h = min(max(s6_ph + 60, 600), 1080)
-            send('Emulation.setDeviceMetricsOverride', {
-                'width': 1920, 'height': s6_viewport_h,
-                'deviceScaleFactor': 1, 'mobile': False
-            })
-            time.sleep(0.5)
-            send('Runtime.evaluate', {'expression': f'window.scrollTo({s6_px}, {s6_py - 20});'})
-            time.sleep(0.3)
-
-            s6_result = send('Page.captureScreenshot', {
-                'format': 'png', 'fromSurface': True
-            })
-
-            s6_name = f"{base_name}_s6.png"
-            s6_path = os.path.join(OUTPUT_DIR, s6_name)
-            s6_data = base64.b64decode(s6_result['result']['data'])
-            with open(s6_path, 'wb') as f:
-                f.write(s6_data)
-
-            # Validate S6 screenshot
-            s6_size = os.path.getsize(s6_path)
-            s6_is_png = s6_data[:4] == b'\x89PNG'
-            if s6_size < 500 or not s6_is_png:
-                print(f"S6 screenshot INVALID: size={s6_size}, is_png={s6_is_png}")
-                s6_name = None
-            else:
-                try:
-                    from PIL import Image
-                    import io as _io
-                    import numpy as _np
-                    img = Image.open(_io.BytesIO(s6_data))
-                    w, h = img.size
-                    gray = img.convert('L')
-                    crop = gray.crop((w*2//10, h*1//10, w*8//10, h*2//10))
-                    arr = _np.array(crop)
-                    std = float(arr.std())
-                    mean = float(arr.mean())
-                    if std < 8:
-                        print(f"S6 appears BLANK: std={std:.1f}, mean={mean:.1f}")
-                        s6_name = None
-                    else:
-                        print(f"S6 saved: {s6_path} ({s6_size:,} bytes, {w}x{h}, std={std:.1f})")
-                except ImportError:
-                    print(f"S6 saved: {s6_path} ({s6_size:,} bytes) — PIL not available")
-        else:
-            print(f"S6 skipped: invalid dimensions {s6_pw}x{s6_ph}")
-
     # Reset viewport
     send('Emulation.setDeviceMetricsOverride', {
         'width': VIEWPORT_W, 'height': VIEWPORT_H,
@@ -445,7 +317,7 @@ def cdp_screenshots(url, base_name, heading=None, heading_index=0,
     })
 
     ws.close()
-    return top_name, intro_name, star_pos, s6_name, viewport_h, s6_viewport_h
+    return top_name, intro_name, star_pos, viewport_h
 
 
 if __name__ == '__main__':
@@ -457,8 +329,6 @@ if __name__ == '__main__':
     base_name = sys.argv[2] if len(sys.argv) > 2 else 'screenshot'
     heading = None
     heading_index = 0
-    s6_heading = None
-    s6_heading_index = 0
     if '--heading' in sys.argv:
         idx = sys.argv.index('--heading')
         if idx + 1 < len(sys.argv):
@@ -467,24 +337,11 @@ if __name__ == '__main__':
         idx = sys.argv.index('--heading-index')
         if idx + 1 < len(sys.argv):
             heading_index = int(sys.argv[idx + 1])
-    if '--s6-heading' in sys.argv:
-        idx = sys.argv.index('--s6-heading')
-        if idx + 1 < len(sys.argv):
-            s6_heading = sys.argv[idx + 1]
-    if '--s6-heading-index' in sys.argv:
-        idx = sys.argv.index('--s6-heading-index')
-        if idx + 1 < len(sys.argv):
-            s6_heading_index = int(sys.argv[idx + 1])
-    top, intro, star, s6_name, intro_h, s6_h = cdp_screenshots(
+    top, intro, star, intro_h = cdp_screenshots(
         url, base_name,
-        heading=heading, heading_index=heading_index,
-        s6_heading=s6_heading, s6_heading_index=s6_heading_index)
+        heading=heading, heading_index=heading_index)
     print(f"TOP: {top}")
     print(f"INTRO: {intro}")
     print(f"INTRO_H: {intro_h}")
-    if s6_name:
-        print(f"S6: {s6_name}")
-    if s6_h:
-        print(f"S6_H: {s6_h}")
     if star:
         print(f"STAR_POS: {json.dumps(star)}")
